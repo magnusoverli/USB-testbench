@@ -1,17 +1,14 @@
 """
-Report generation functions for USB flash drive benchmark tool.
+Report generation functions for USB flash drive benchmark tool with scalability features.
 """
 import os
 import json
 import datetime
-import bs4
+import math
 from typing import List, Dict, Optional, Tuple, Any
 
 def parse_existing_report(report_path: str) -> List[Dict]:
-    """
-    Parse an existing HTML report to extract device data.
-    Returns a list of devices or an empty list if the file doesn't exist.
-    """
+    """Parse an existing HTML report to extract device data."""
     if not os.path.exists(report_path):
         return []
     
@@ -23,7 +20,7 @@ def parse_existing_report(report_path: str) -> List[Dict]:
         
         # Extract device data from the table
         devices = []
-        table = soup.find('table')
+        table = soup.find('table', id='summary-table')
         
         if not table:
             return []
@@ -36,9 +33,9 @@ def parse_existing_report(report_path: str) -> List[Dict]:
                 device = {
                     'device': {
                         'friendly_name': cols[0].text.strip(),
-                        'mount_point': None,  # Not in table, will be filled later
-                        'vendor': None,       # Not in table, extracted from friendly_name
-                        'model': None,        # Not in table, extracted from friendly_name
+                        'mount_point': None,
+                        'vendor': None,
+                        'model': None,
                     },
                     'latency': {
                         'write_ms': float(cols[1].text.strip()),
@@ -52,28 +49,27 @@ def parse_existing_report(report_path: str) -> List[Dict]:
                     'timestamp': cols[6].text.strip()
                 }
                 
-                # Try to extract more detailed info from device_info divs
-                device_divs = soup.find_all('div', class_='device-info')
-                for div in device_divs:
-                    heading = div.find('h3')
-                    if heading and heading.text.strip() == device['device']['friendly_name']:
-                        # Extract vendor and model from the div
-                        paras = div.find_all('p')
-                        for p in paras:
-                            text = p.text.strip()
-                            if text.startswith('Vendor:'):
-                                device['device']['vendor'] = text.replace('Vendor:', '').strip()
-                            elif text.startswith('Model:'):
-                                device['device']['model'] = text.replace('Model:', '').strip()
-                            elif text.startswith('Mount Point:'):
-                                device['device']['mount_point'] = text.replace('Mount Point:', '').strip()
-                            elif text.startswith('GUID:'):
-                                device['device']['guid'] = text.replace('GUID:', '').strip()
-                            elif text.startswith('Size:'):
-                                size_text = text.replace('Size:', '').strip()
-                                if 'GB' in size_text:
-                                    size_gb = float(size_text.replace('GB', '').strip())
-                                    device['device']['size_bytes'] = int(size_gb * 1024 * 1024 * 1024)
+                # Try to extract detailed device info
+                device_div = soup.find('div', id=f"device-{len(devices)}")
+                if device_div:
+                    info_rows = device_div.find_all('tr')
+                    for info_row in info_rows:
+                        cells = info_row.find_all('td')
+                        if len(cells) == 2:
+                            key = cells[0].text.strip().replace(':', '')
+                            value = cells[1].text.strip()
+                            
+                            if key == 'Vendor':
+                                device['device']['vendor'] = value
+                            elif key == 'Model':
+                                device['device']['model'] = value
+                            elif key == 'Mount Point':
+                                device['device']['mount_point'] = value
+                            elif key == 'GUID':
+                                device['device']['guid'] = value
+                            elif key == 'Size' and 'GB' in value:
+                                size_gb = float(value.replace('GB', '').strip())
+                                device['device']['size_bytes'] = int(size_gb * 1024 * 1024 * 1024)
                 
                 devices.append(device)
         
@@ -84,10 +80,7 @@ def parse_existing_report(report_path: str) -> List[Dict]:
         return []
 
 def device_exists(devices: List[Dict], new_device: Dict) -> int:
-    """
-    Check if a device with the same friendly name exists in the list.
-    Returns the index of the device if found, otherwise -1.
-    """
+    """Check if device exists in list. Returns index if found, otherwise -1."""
     for i, device in enumerate(devices):
         if (device['device']['friendly_name'] == new_device['device']['friendly_name'] or
             (device['device'].get('guid') and new_device['device'].get('guid') and 
@@ -96,20 +89,18 @@ def device_exists(devices: List[Dict], new_device: Dict) -> int:
     return -1
 
 def convert_benchmarks_to_device_data(drive_info: Dict, write_results: Dict, read_results: Dict, seek_results: Dict) -> Dict:
-    """
-    Convert benchmark results to device data format for storage.
-    """
+    """Convert benchmark results to device data format."""
     size_gb = drive_info['SizeGB']
     size_bytes = int(size_gb * 1024 * 1024 * 1024)
     
-    # Try to extract vendor and model from the drive info
+    # Extract vendor and model
     vendor = drive_info.get('Vendor', 'Unknown')
     model = drive_info.get('Model', drive_info.get('VolumeName', 'Unknown Device'))
     friendly_name = f"{vendor} {model}".strip()
     if friendly_name == "Unknown Unknown Device":
         friendly_name = f"Drive {drive_info['DriveLetter']}"
     
-    # Create a device data object
+    # Create device data object
     device_data = {
         'timestamp': datetime.datetime.now().isoformat(),
         'device': {
@@ -134,31 +125,56 @@ def convert_benchmarks_to_device_data(drive_info: Dict, write_results: Dict, rea
     
     return device_data
 
-def generate_html_report(devices: List[Dict], output_path: str) -> None:
-    """
-    Generate an HTML report with benchmark results.
+def get_short_name(device: Dict) -> str:
+    """Generate a short name for a device, removing common prefixes."""
+    model_name = device['device']['model']
+    if model_name and model_name.startswith("(Standard disk drives) "):
+        return model_name.replace("(Standard disk drives) ", "")
+    elif model_name:
+        return model_name
+    else:
+        return device['device']['friendly_name'].split()[-1] if ' ' in device['device']['friendly_name'] else device['device']['friendly_name']
+
+def categorize_devices(devices: List[Dict]) -> Dict[str, List[Dict]]:
+    """Group devices by manufacturer or other suitable category."""
+    categories = {}
     
-    Args:
-        devices: List of device data dictionaries
-        output_path: Path where to save the HTML report
-    """
+    for device in devices:
+        vendor = device['device']['vendor']
+        if vendor == "(Standard disk drives)":
+            # Extract real vendor from model name if possible
+            model = device['device']['model']
+            if model:
+                parts = model.split()
+                if parts:
+                    vendor = parts[0]  # Use first word of model name as vendor
+        
+        if not vendor or vendor == "Unknown":
+            vendor = "Other"
+            
+        if vendor not in categories:
+            categories[vendor] = []
+            
+        categories[vendor].append(device)
+    
+    return categories
+
+def generate_html_report(devices: List[Dict], output_path: str) -> None:
+    """Generate an HTML report with benchmark results, scalable for many devices."""
     # Sort devices by read throughput (descending)
     sorted_devices = sorted(devices, key=lambda d: d['throughput'].get('read_mbps', 0) 
                            if d['throughput'].get('read_mbps') is not None else 0, reverse=True)
     
-    # Create device rows for the table
+    # Get top performers in each category
+    top_write_latency = sorted(sorted_devices, key=lambda d: d['latency']['write_ms'])[:5]
+    top_read_latency = sorted(sorted_devices, key=lambda d: d['latency']['read_ms'])[:5]
+    top_write_throughput = sorted(sorted_devices, key=lambda d: -d['throughput']['write_mbps'])[:5]
+    top_read_throughput = sorted(sorted_devices, key=lambda d: -d['throughput']['read_mbps'])[:5]
+    
+    # Create device rows for the summary table
     device_rows = ""
-    device_info_divs = ""
     
-    # Prepare data for charts
-    device_names = []
-    write_latency = []
-    read_latency = []
-    random_read_latency = []
-    write_throughput = []
-    read_throughput = []
-    
-    for device in sorted_devices:
+    for i, device in enumerate(sorted_devices):
         # Skip devices with missing data
         if (device['latency'].get('read_ms') is None or 
             device['latency'].get('write_ms') is None or 
@@ -167,14 +183,6 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             continue
         
         device_name = device['device']['friendly_name']
-        device_names.append(device_name)
-        
-        # Add data for charts
-        write_latency.append(device['latency']['write_ms'])
-        read_latency.append(device['latency']['read_ms'])
-        random_read_latency.append(device['latency']['random_read_ms'])
-        write_throughput.append(device['throughput']['write_mbps'])
-        read_throughput.append(device['throughput']['read_mbps'])
         
         # Format timestamp for display
         timestamp = device['timestamp']
@@ -183,8 +191,8 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
         
         # Add row to table
         device_rows += f"""
-        <tr>
-            <td>{device_name}</td>
+        <tr data-device-id="{i}">
+            <td><label><input type="checkbox" class="device-selector" data-device-id="{i}"> {device_name}</label></td>
             <td>{device['latency']['write_ms']:.2f}</td>
             <td>{device['latency']['read_ms']:.2f}</td>
             <td>{device['latency']['random_read_ms']:.2f}</td>
@@ -193,36 +201,69 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             <td class="timestamp">{timestamp}</td>
         </tr>
         """
+    
+    # Create detailed info for each device
+    device_details = ""
+    for i, device in enumerate(sorted_devices):
+        model = device['device']['model'] or "Unknown Model"
+        vendor = device['device']['vendor'] or "Unknown Vendor"
+        mount_point = device['device']['mount_point'] or "Unknown"
+        guid = device['device'].get('guid', 'None')
+        size_gb = device['device']['size_bytes'] / (1024 * 1024 * 1024) if device['device'].get('size_bytes') else 0
         
-        # Add detailed device info
-        size_gb = device['device']['size_bytes'] / (1024 * 1024 * 1024)
-        device_info_divs += f"""
-        <div class="device-info">
-            <h3>{device_name}</h3>
-            <p><strong>Vendor:</strong> {device['device']['vendor']}</p>
-            <p><strong>Model:</strong> {device['device']['model']}</p>
-            <p><strong>Mount Point:</strong> {device['device']['mount_point']}</p>
-            <p><strong>Device Path:</strong> {device['device'].get('device_path', 'None')}</p>
-            <p><strong>GUID:</strong> {device['device'].get('guid', 'None')}</p>
-            <p><strong>Size:</strong> {size_gb:.2f} GB</p>
-            <p><strong>Last Tested:</strong> {timestamp}</p>
-            
-            <h4>Performance Results</h4>
-            <p><strong>Write Latency:</strong> {device['latency']['write_ms']:.2f} ms</p>
-            <p><strong>Read Latency:</strong> {device['latency']['read_ms']:.2f} ms</p>
-            <p><strong>Random Read Latency:</strong> {device['latency']['random_read_ms']:.2f} ms</p>
-            <p><strong>Write Throughput:</strong> {device['throughput']['write_mbps']:.2f} MB/s</p>
-            <p><strong>Read Throughput:</strong> {device['throughput']['read_mbps']:.2f} MB/s</p>
+        timestamp = device['timestamp']
+        if 'T' in timestamp:
+            timestamp = timestamp.split('T')[0] + ' ' + timestamp.split('T')[1][:5]
+        
+        device_details += f"""
+        <div id="device-{i}" class="device-detail" style="display:none;">
+            <h3>{device['device']['friendly_name']}</h3>
+            <table class="detail-table">
+                <tr><td><strong>Vendor:</strong></td><td>{vendor}</td></tr>
+                <tr><td><strong>Model:</strong></td><td>{model}</td></tr>
+                <tr><td><strong>Mount Point:</strong></td><td>{mount_point}</td></tr>
+                <tr><td><strong>GUID:</strong></td><td>{guid}</td></tr>
+                <tr><td><strong>Size:</strong></td><td>{size_gb:.2f} GB</td></tr>
+                <tr><td><strong>Last Tested:</strong></td><td>{timestamp}</td></tr>
+                <tr><td colspan="2"><h4>Performance Results</h4></td></tr>
+                <tr><td><strong>Write Latency:</strong></td><td>{device['latency']['write_ms']:.2f} ms</td></tr>
+                <tr><td><strong>Read Latency:</strong></td><td>{device['latency']['read_ms']:.2f} ms</td></tr>
+                <tr><td><strong>Random Read Latency:</strong></td><td>{device['latency']['random_read_ms']:.2f} ms</td></tr>
+                <tr><td><strong>Write Throughput:</strong></td><td>{device['throughput']['write_mbps']:.2f} MB/s</td></tr>
+                <tr><td><strong>Read Throughput:</strong></td><td>{device['throughput']['read_mbps']:.2f} MB/s</td></tr>
+            </table>
         </div>
         """
     
-    # Format data for JavaScript charts
-    device_names_js = json.dumps(device_names)
-    write_latency_js = json.dumps(write_latency)
-    read_latency_js = json.dumps(read_latency)
-    random_read_latency_js = json.dumps(random_read_latency)
-    write_throughput_js = json.dumps(write_throughput)
-    read_throughput_js = json.dumps(read_throughput)
+    # Group devices by category for segmented viewing
+    categories = categorize_devices(sorted_devices)
+    category_options = ""
+    for category in sorted(categories.keys()):
+        category_options += f'<option value="{category}">{category} ({len(categories[category])})</option>'
+    
+    # Create comparison table
+    comparison_headers = ""
+    comparison_rows = ""
+    
+    # Properties for comparison
+    properties = [
+        ("Vendor", lambda d: d['device']['vendor']),
+        ("Model", lambda d: d['device']['model']),
+        ("Size", lambda d: f"{d['device']['size_bytes'] / (1024*1024*1024):.2f} GB" if d['device'].get('size_bytes') else "N/A"),
+        ("Write Latency", lambda d: f"{d['latency']['write_ms']:.2f} ms"),
+        ("Read Latency", lambda d: f"{d['latency']['read_ms']:.2f} ms"),
+        ("Random Read Latency", lambda d: f"{d['latency']['random_read_ms']:.2f} ms"),
+        ("Write Throughput", lambda d: f"{d['throughput']['write_mbps']:.2f} MB/s"),
+        ("Read Throughput", lambda d: f"{d['throughput']['read_mbps']:.2f} MB/s"),
+        ("Last Tested", lambda d: d['timestamp'].split('T')[0] + ' ' + d['timestamp'].split('T')[1][:5] if 'T' in d['timestamp'] else d['timestamp']),
+    ]
+    
+    # Generate rows for the property table
+    for prop_name, prop_getter in properties:
+        comparison_rows += f'<tr class="comparison-row"><td><strong>{prop_name}</strong></td>'
+        for i in range(5):  # Start with 5 empty slots
+            comparison_rows += f'<td class="comparison-slot" id="prop-{prop_name.replace(" ", "-")}-{i}"></td>'
+        comparison_rows += '</tr>'
     
     # Generate HTML
     html = f"""<!DOCTYPE html>
@@ -240,7 +281,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             margin: 0 auto;
             padding: 20px;
         }}
-        h1, h2 {{
+        h1, h2, h3 {{
             color: #2c3e50;
         }}
         table {{
@@ -249,13 +290,15 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             margin: 20px 0;
         }}
         th, td {{
-            padding: 12px 15px;
+            padding: 10px;
             border: 1px solid #ddd;
             text-align: left;
         }}
         th {{
             background-color: #f8f9fa;
             font-weight: bold;
+            position: sticky;
+            top: 0;
         }}
         tr:nth-child(even) {{
             background-color: #f2f2f2;
@@ -263,36 +306,173 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
         tr:hover {{
             background-color: #e9ecef;
         }}
-        .best {{
-            background-color: #d4edda;
+        .summary-table {{
+            max-height: 600px;
+            overflow-y: auto;
         }}
-        .worst {{
-            background-color: #f8d7da;
+        .tabs {{
+            display: flex;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #ddd;
         }}
-        .device-info {{
-            margin-bottom: 30px;
+        .tab {{
+            padding: 8px 16px;
+            cursor: pointer;
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            margin-right: 4px;
+            border-radius: 4px 4px 0 0;
+        }}
+        .tab.active {{
+            background: #fff;
+            border-bottom: 1px solid #fff;
+            margin-bottom: -1px;
+        }}
+        .tab-content {{
+            display: none;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-top: none;
+        }}
+        .tab-content.active {{
+            display: block;
+        }}
+        .chart-container {{
+            position: relative;
+            height: 300px;
+            max-width: 100%;
+            margin-bottom: 20px;
+        }}
+        .dashboard {{
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }}
+        .metric-card {{
+            width: 18%;
+            min-width: 180px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 15px;
+        }}
+        .metric-value {{
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+            color: #2c3e50;
+        }}
+        .metric-label {{
+            font-size: 14px;
+            color: #6c757d;
+        }}
+        .metric-unit {{
+            font-size: 14px;
+            color: #6c757d;
+            margin-left: 5px;
+        }}
+        .controls {{
+            margin: 15px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }}
+        .controls select, .controls input {{
+            padding: 6px;
+            margin-right: 10px;
+        }}
+        .controls button {{
+            padding: 6px 12px;
+            background: #2c3e50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }}
+        .controls button:hover {{
+            background: #34495e;
+        }}
+        .device-detail {{
+            margin-top: 20px;
             padding: 15px;
             border: 1px solid #ddd;
             border-radius: 5px;
         }}
-        .summary-chart {{
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            margin-bottom: 30px;
+        .detail-table {{
+            width: 100%;
+            margin-top: 10px;
         }}
-        .chart {{
-            width: 48%;
-            min-width: 300px;
-            height: 300px;
-            margin-bottom: 20px;
+        .detail-table td {{
+            padding: 8px;
             border: 1px solid #ddd;
-            padding: 10px;
-            box-sizing: border-box;
         }}
-        .timestamp {{
-            font-size: 0.8em;
-            color: #6c757d;
+        .detail-table td:first-child {{
+            width: 30%;
+            background-color: #f8f9fa;
+        }}
+        .comparison-container {{
+            margin-top: 20px;
+            overflow-x: auto;
+        }}
+        .comparison-table {{
+            min-width: 600px;
+        }}
+        .comparison-table th {{
+            min-width: 120px;
+        }}
+        .comparison-slot {{
+            min-width: 120px;
+        }}
+        .btn-action {{
+            padding: 4px 8px;
+            margin: 0 2px;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }}
+        .btn-action:hover {{
+            background: #e9ecef;
+        }}
+        .highlight {{
+            background-color: #d4edda;
+        }}
+        .pagination {{
+            display: flex;
+            justify-content: center;
+            margin-top: 15px;
+        }}
+        .pagination button {{
+            padding: 5px 10px;
+            margin: 0 5px;
+            border: 1px solid #ddd;
+            background: #fff;
+            cursor: pointer;
+        }}
+        .pagination button.active {{
+            background: #2c3e50;
+            color: white;
+        }}
+        .search-box {{
+            padding: 8px;
+            width: 300px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }}
+        .tooltip {{
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 3px;
+            pointer-events: none;
+            z-index: 100;
+            font-size: 12px;
         }}
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -300,126 +480,740 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
 <body>
     <h1>USB Memory Stick Benchmark Results</h1>
     <p>Report generated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-
-    <div class="summary-chart">
-        <div class="chart">
-            <canvas id="latencyChart"></canvas>
+    
+    <div class="controls">
+        <input type="text" id="search-devices" class="search-box" placeholder="Search devices...">
+        <select id="category-filter">
+            <option value="all">All Categories</option>
+            {category_options}
+        </select>
+        <select id="sort-by">
+            <option value="read_throughput">Sort by Read Throughput</option>
+            <option value="write_throughput">Sort by Write Throughput</option>
+            <option value="read_latency">Sort by Read Latency</option>
+            <option value="write_latency">Sort by Write Latency</option>
+            <option value="random_latency">Sort by Random Read Latency</option>
+        </select>
+        <button id="compare-selected">Compare Selected</button>
+        <button id="chart-selected">Chart Selected</button>
+    </div>
+    
+    <div class="tabs">
+        <div class="tab active" data-tab="summary">Summary</div>
+        <div class="tab" data-tab="dashboard">Dashboard</div>
+        <div class="tab" data-tab="details">Device Details</div>
+        <div class="tab" data-tab="comparison">Compare</div>
+        <div class="tab" data-tab="charts">Charts</div>
+    </div>
+    
+    <div id="summary" class="tab-content active">
+        <h2>Benchmark Results Summary</h2>
+        <div class="summary-table">
+            <table id="summary-table">
+                <thead>
+                    <tr>
+                        <th>Device</th>
+                        <th>Write Latency (ms)</th>
+                        <th>Read Latency (ms)</th>
+                        <th>Random Read Latency (ms)</th>
+                        <th>Write Throughput (MB/s)</th>
+                        <th>Read Throughput (MB/s)</th>
+                        <th>Last Tested</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {device_rows}
+                </tbody>
+            </table>
         </div>
-        <div class="chart">
-            <canvas id="throughputChart"></canvas>
+        <div class="pagination" id="summary-pagination"></div>
+    </div>
+    
+    <div id="dashboard" class="tab-content">
+        <h2>Performance Dashboard</h2>
+        <div class="dashboard">
+            <div class="metric-card">
+                <div class="metric-label">Best Read Throughput</div>
+                <div class="metric-value" id="best-read-throughput">
+                    {top_read_throughput[0]['throughput']['read_mbps']:.1f}<span class="metric-unit">MB/s</span>
+                </div>
+                <div>{get_short_name(top_read_throughput[0])}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Best Write Throughput</div>
+                <div class="metric-value" id="best-write-throughput">
+                    {top_write_throughput[0]['throughput']['write_mbps']:.1f}<span class="metric-unit">MB/s</span>
+                </div>
+                <div>{get_short_name(top_write_throughput[0])}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Best Read Latency</div>
+                <div class="metric-value" id="best-read-latency">
+                    {top_read_latency[0]['latency']['read_ms']:.1f}<span class="metric-unit">ms</span>
+                </div>
+                <div>{get_short_name(top_read_latency[0])}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Best Write Latency</div>
+                <div class="metric-value" id="best-write-latency">
+                    {top_write_latency[0]['latency']['write_ms']:.1f}<span class="metric-unit">ms</span>
+                </div>
+                <div>{get_short_name(top_write_latency[0])}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Total Devices</div>
+                <div class="metric-value" id="total-devices">
+                    {len(sorted_devices)}
+                </div>
+                <div>From {len(categories)} vendors</div>
+            </div>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="topDevicesChart"></canvas>
+        </div>
+    </div>
+    
+    <div id="details" class="tab-content">
+        <h2>Device Details</h2>
+        <select id="device-selector">
+            <option value="">Select a device...</option>
+            {' '.join([f'<option value="{i}">{device["device"]["friendly_name"]}</option>' for i, device in enumerate(sorted_devices)])}
+        </select>
+        
+        {device_details}
+    </div>
+    
+    <div id="comparison" class="tab-content">
+        <h2>Device Comparison</h2>
+        <p>Select up to 5 devices from the summary tab to compare them side by side.</p>
+        <div class="comparison-container">
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>Property</th>
+                        <th id="comparison-device-0">Device 1</th>
+                        <th id="comparison-device-1">Device 2</th>
+                        <th id="comparison-device-2">Device 3</th>
+                        <th id="comparison-device-3">Device 4</th>
+                        <th id="comparison-device-4">Device 5</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {comparison_rows}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div id="charts" class="tab-content">
+        <h2>Performance Charts</h2>
+        <div class="controls">
+            <select id="chart-metric">
+                <option value="read_throughput">Read Throughput (MB/s)</option>
+                <option value="write_throughput">Write Throughput (MB/s)</option>
+                <option value="read_latency">Read Latency (ms)</option>
+                <option value="write_latency">Write Latency (ms)</option>
+                <option value="random_latency">Random Read Latency (ms)</option>
+            </select>
+            <select id="chart-limit">
+                <option value="5">Top 5</option>
+                <option value="10">Top 10</option>
+                <option value="15">Top 15</option>
+                <option value="all">All Devices</option>
+            </select>
+            <button id="update-chart">Update Chart</button>
+        </div>
+        <div class="chart-container">
+            <canvas id="performanceChart"></canvas>
         </div>
     </div>
 
-    <h2>Benchmark Results Summary</h2>
-    <table>
-        <tr>
-            <th>Device</th>
-            <th>Write Latency (ms)</th>
-            <th>Read Latency (ms)</th>
-            <th>Random Read Latency (ms)</th>
-            <th>Write Throughput (MB/s)</th>
-            <th>Read Throughput (MB/s)</th>
-            <th>Last Tested</th>
-        </tr>
-        {device_rows}
-    </table>
-
-    <h2>Detailed Device Information</h2>
-    {device_info_divs}
-
     <script>
-        // Latency Chart
-        const latencyCtx = document.getElementById('latencyChart').getContext('2d');
-        new Chart(latencyCtx, {{
-            type: 'bar',
-            data: {{
-                labels: {device_names_js},
-                datasets: [
-                    {{
-                        label: 'Write Latency (ms)',
-                        data: {write_latency_js},
-                        backgroundColor: 'rgba(255, 99, 132, 0.5)',
-                        borderColor: 'rgba(255, 99, 132, 1)',
-                        borderWidth: 1
-                    }},
-                    {{
-                        label: 'Read Latency (ms)',
-                        data: {read_latency_js},
+        // Store all device data for client-side operations
+        const allDevices = {json.dumps(sorted_devices)};
+        let selectedDevices = [];
+        const ITEMS_PER_PAGE = 15;
+        let currentPage = 1;
+        
+        // Helper function to get short device name
+        function getShortName(device) {
+            const model = device.device.model;
+            if (model && model.startsWith("(Standard disk drives) ")) {
+                return model.replace("(Standard disk drives) ", "");
+            } else if (model) {
+                return model;
+            } else {
+                const fullName = device.device.friendly_name;
+                return fullName.includes(' ') ? fullName.split(' ').pop() : fullName;
+            }
+        }
+        
+        // Initialize tabs
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+                
+                // Initialize charts when tab is selected
+                if (tab.dataset.tab === 'dashboard') {
+                    initializeDashboardChart();
+                } else if (tab.dataset.tab === 'charts') {
+                    updatePerformanceChart();
+                }
+            });
+        });
+        
+        // Initialize dashboard chart
+        function initializeDashboardChart() {
+            const ctx = document.getElementById('topDevicesChart').getContext('2d');
+            const topReadDevices = [...allDevices].sort((a, b) => 
+                b.throughput.read_mbps - a.throughput.read_mbps).slice(0, 5);
+                
+            const labels = topReadDevices.map(device => getShortName(device));
+            const readData = topReadDevices.map(device => device.throughput.read_mbps);
+            const writeData = topReadDevices.map(device => device.throughput.write_mbps);
+            
+            if (window.topDevicesChart) {
+                window.topDevicesChart.destroy();
+            }
+            
+            window.topDevicesChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Read Throughput (MB/s)',
+                            data: readData,
+                            backgroundColor: 'rgba(153, 102, 255, 0.5)',
+                            borderColor: 'rgba(153, 102, 255, 1)',
+                            borderWidth: 1
+                        },
+                        {
+                            label: 'Write Throughput (MB/s)',
+                            data: writeData,
+                            backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'MB/s'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Top 5 Devices by Read Throughput'
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Update performance chart based on selected options
+        function updatePerformanceChart() {
+            const metric = document.getElementById('chart-metric').value;
+            const limit = document.getElementById('chart-limit').value;
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+            
+            let metricPath, metricLabel, sortDirection, yAxisLabel;
+            
+            switch(metric) {
+                case 'read_throughput':
+                    metricPath = device => device.throughput.read_mbps;
+                    metricLabel = 'Read Throughput';
+                    sortDirection = -1; // Higher is better
+                    yAxisLabel = 'MB/s (higher is better)';
+                    break;
+                case 'write_throughput':
+                    metricPath = device => device.throughput.write_mbps;
+                    metricLabel = 'Write Throughput';
+                    sortDirection = -1; // Higher is better
+                    yAxisLabel = 'MB/s (higher is better)';
+                    break;
+                case 'read_latency':
+                    metricPath = device => device.latency.read_ms;
+                    metricLabel = 'Read Latency';
+                    sortDirection = 1; // Lower is better
+                    yAxisLabel = 'ms (lower is better)';
+                    break;
+                case 'write_latency':
+                    metricPath = device => device.latency.write_ms;
+                    metricLabel = 'Write Latency';
+                    sortDirection = 1; // Lower is better
+                    yAxisLabel = 'ms (lower is better)';
+                    break;
+                case 'random_latency':
+                    metricPath = device => device.latency.random_read_ms;
+                    metricLabel = 'Random Read Latency';
+                    sortDirection = 1; // Lower is better
+                    yAxisLabel = 'ms (lower is better)';
+                    break;
+            }
+            
+            // Sort and limit devices
+            let devicesToChart = [...allDevices].sort((a, b) => 
+                sortDirection * (metricPath(a) - metricPath(b))
+            );
+            
+            if (limit !== 'all') {
+                devicesToChart = devicesToChart.slice(0, parseInt(limit));
+            }
+            
+            const labels = devicesToChart.map(device => getShortName(device));
+            const data = devicesToChart.map(metricPath);
+            
+            if (window.performanceChart) {
+                window.performanceChart.destroy();
+            }
+            
+            window.performanceChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: metricLabel,
+                        data: data,
                         backgroundColor: 'rgba(54, 162, 235, 0.5)',
                         borderColor: 'rgba(54, 162, 235, 1)',
                         borderWidth: 1
-                    }},
-                    {{
-                        label: 'Random Read Latency (ms)',
-                        data: {random_read_latency_js},
-                        backgroundColor: 'rgba(255, 206, 86, 0.5)',
-                        borderColor: 'rgba(255, 206, 86, 1)',
-                        borderWidth: 1
-                    }}
-                ]
-            }},
-            options: {{
-                responsive: true,
-                scales: {{
-                    y: {{
-                        beginAtZero: true,
-                        title: {{
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: yAxisLabel
+                            }
+                        },
+                        x: {
+                            ticks: {
+                                autoSkip: false,
+                                maxRotation: 45,
+                                minRotation: 45
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
                             display: true,
-                            text: 'Milliseconds (lower is better)'
-                        }}
-                    }}
-                }},
-                plugins: {{
-                    title: {{
-                        display: true,
-                        text: 'Latency Comparison'
-                    }}
-                }}
-            }}
-        }});
-
-        // Throughput Chart
-        const throughputCtx = document.getElementById('throughputChart').getContext('2d');
-        new Chart(throughputCtx, {{
-            type: 'bar',
-            data: {{
-                labels: {device_names_js},
-                datasets: [
-                    {{
-                        label: 'Write Throughput (MB/s)',
-                        data: {write_throughput_js},
-                        backgroundColor: 'rgba(75, 192, 192, 0.5)',
-                        borderColor: 'rgba(75, 192, 192, 1)',
+                            text: `${metricLabel} Comparison`
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Device details selector
+        document.getElementById('device-selector').addEventListener('change', function() {
+            const deviceId = this.value;
+            document.querySelectorAll('.device-detail').forEach(detail => {
+                detail.style.display = 'none';
+            });
+            
+            if (deviceId) {
+                document.getElementById(`device-${deviceId}`).style.display = 'block';
+            }
+        });
+        
+        // Setup pagination
+        function setupPagination() {
+            const totalPages = Math.ceil(filteredDevices.length / ITEMS_PER_PAGE);
+            const pagination = document.getElementById('summary-pagination');
+            pagination.innerHTML = '';
+            
+            if (totalPages <= 1) return;
+            
+            // Previous button
+            const prevBtn = document.createElement('button');
+            prevBtn.textContent = '«';
+            prevBtn.disabled = currentPage === 1;
+            prevBtn.addEventListener('click', () => {
+                if (currentPage > 1) {
+                    currentPage--;
+                    displayDevices();
+                }
+            });
+            pagination.appendChild(prevBtn);
+            
+            // Page buttons
+            for (let i = 1; i <= totalPages; i++) {
+                const pageBtn = document.createElement('button');
+                pageBtn.textContent = i;
+                pageBtn.classList.toggle('active', i === currentPage);
+                pageBtn.addEventListener('click', () => {
+                    currentPage = i;
+                    displayDevices();
+                });
+                pagination.appendChild(pageBtn);
+            }
+            
+            // Next button
+            const nextBtn = document.createElement('button');
+            nextBtn.textContent = '»';
+            nextBtn.disabled = currentPage === totalPages;
+            nextBtn.addEventListener('click', () => {
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    displayDevices();
+                }
+            });
+            pagination.appendChild(nextBtn);
+        }
+        
+        // Selected devices for comparison
+        document.getElementById('compare-selected').addEventListener('click', () => {
+            if (selectedDevices.length === 0) {
+                alert('Please select at least one device to compare');
+                return;
+            }
+            
+            // Show comparison tab
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector('.tab[data-tab="comparison"]').classList.add('active');
+            document.getElementById('comparison').classList.add('active');
+            
+            // Clear previous comparison
+            for (let i = 0; i < 5; i++) {
+                document.getElementById(`comparison-device-${i}`).textContent = `Device ${i+1}`;
+                document.getElementById(`comparison-device-${i}`).style.fontWeight = 'normal';
+            }
+            
+            document.querySelectorAll('.comparison-slot').forEach(slot => {
+                slot.textContent = '';
+                slot.classList.remove('highlight');
+            });
+            
+            // Fill in comparison
+            selectedDevices.slice(0, 5).forEach((deviceId, index) => {
+                const device = allDevices[deviceId];
+                document.getElementById(`comparison-device-${index}`).textContent = getShortName(device);
+                document.getElementById(`comparison-device-${index}`).style.fontWeight = 'bold';
+                
+                // Fill in properties
+                document.getElementById(`prop-Vendor-${index}`).textContent = device.device.vendor || 'Unknown';
+                document.getElementById(`prop-Model-${index}`).textContent = device.device.model || 'Unknown';
+                document.getElementById(`prop-Size-${index}`).textContent = 
+                    device.device.size_bytes ? 
+                    `${(device.device.size_bytes / (1024*1024*1024)).toFixed(2)} GB` : 'Unknown';
+                document.getElementById(`prop-Write-Latency-${index}`).textContent = `${device.latency.write_ms.toFixed(2)} ms`;
+                document.getElementById(`prop-Read-Latency-${index}`).textContent = `${device.latency.read_ms.toFixed(2)} ms`;
+                document.getElementById(`prop-Random-Read-Latency-${index}`).textContent = `${device.latency.random_read_ms.toFixed(2)} ms`;
+                document.getElementById(`prop-Write-Throughput-${index}`).textContent = `${device.throughput.write_mbps.toFixed(2)} MB/s`;
+                document.getElementById(`prop-Read-Throughput-${index}`).textContent = `${device.throughput.read_mbps.toFixed(2)} MB/s`;
+                document.getElementById(`prop-Last-Tested-${index}`).textContent = 
+                    device.timestamp.includes('T') ? 
+                    `${device.timestamp.split('T')[0]} ${device.timestamp.split('T')[1].substring(0, 5)}` : 
+                    device.timestamp;
+            });
+            
+            // Highlight best values
+            highlightBestValues();
+        });
+        
+        function highlightBestValues() {
+            // Properties that are better when higher
+            ['Write-Throughput', 'Read-Throughput'].forEach(prop => {
+                let bestValue = -Infinity;
+                let bestIndex = -1;
+                
+                // Find best value
+                for (let i = 0; i < Math.min(selectedDevices.length, 5); i++) {
+                    const cell = document.getElementById(`prop-${prop}-${i}`);
+                    const value = parseFloat(cell.textContent);
+                    if (value > bestValue) {
+                        bestValue = value;
+                        bestIndex = i;
+                    }
+                }
+                
+                // Highlight best
+                if (bestIndex >= 0) {
+                    document.getElementById(`prop-${prop}-${bestIndex}`).classList.add('highlight');
+                }
+            });
+            
+            // Properties that are better when lower
+            ['Write-Latency', 'Read-Latency', 'Random-Read-Latency'].forEach(prop => {
+                let bestValue = Infinity;
+                let bestIndex = -1;
+                
+                // Find best value
+                for (let i = 0; i < Math.min(selectedDevices.length, 5); i++) {
+                    const cell = document.getElementById(`prop-${prop}-${i}`);
+                    const value = parseFloat(cell.textContent);
+                    if (value < bestValue) {
+                        bestValue = value;
+                        bestIndex = i;
+                    }
+                }
+                
+                // Highlight best
+                if (bestIndex >= 0) {
+                    document.getElementById(`prop-${prop}-${bestIndex}`).classList.add('highlight');
+                }
+            });
+        }
+        
+        // Device selection
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('device-selector')) {
+                const deviceId = parseInt(e.target.dataset.deviceId);
+                
+                if (e.target.checked) {
+                    if (selectedDevices.length >= 5) {
+                        alert('You can only compare up to 5 devices at once');
+                        e.target.checked = false;
+                        return;
+                    }
+                    selectedDevices.push(deviceId);
+                } else {
+                    selectedDevices = selectedDevices.filter(id => id !== deviceId);
+                }
+            }
+        });
+        
+        // Search functionality
+        document.getElementById('search-devices').addEventListener('input', function() {
+            currentPage = 1;
+            displayDevices();
+        });
+        
+        // Category filter
+        document.getElementById('category-filter').addEventListener('change', function() {
+            currentPage = 1;
+            displayDevices();
+        });
+        
+        // Sort by
+        document.getElementById('sort-by').addEventListener('change', function() {
+            currentPage = 1;
+            displayDevices();
+        });
+        
+        // Chart selected devices
+        document.getElementById('chart-selected').addEventListener('click', function() {
+            if (selectedDevices.length === 0) {
+                alert('Please select at least one device to chart');
+                return;
+            }
+            
+            // Switch to charts tab
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector('.tab[data-tab="charts"]').classList.add('active');
+            document.getElementById('charts').classList.add('active');
+            
+            // Create custom chart with selected devices
+            createCustomChart();
+        });
+        
+        function createCustomChart() {
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+            const metric = document.getElementById('chart-metric').value;
+            
+            let metricPath, metricLabel, yAxisLabel;
+            
+            switch(metric) {
+                case 'read_throughput':
+                    metricPath = device => device.throughput.read_mbps;
+                    metricLabel = 'Read Throughput';
+                    yAxisLabel = 'MB/s';
+                    break;
+                case 'write_throughput':
+                    metricPath = device => device.throughput.write_mbps;
+                    metricLabel = 'Write Throughput';
+                    yAxisLabel = 'MB/s';
+                    break;
+                case 'read_latency':
+                    metricPath = device => device.latency.read_ms;
+                    metricLabel = 'Read Latency';
+                    yAxisLabel = 'ms';
+                    break;
+                case 'write_latency':
+                    metricPath = device => device.latency.write_ms;
+                    metricLabel = 'Write Latency';
+                    yAxisLabel = 'ms';
+                    break;
+                case 'random_latency':
+                    metricPath = device => device.latency.random_read_ms;
+                    metricLabel = 'Random Read Latency';
+                    yAxisLabel = 'ms';
+                    break;
+            }
+            
+            const selectedDeviceData = selectedDevices.map(id => allDevices[id]);
+            const labels = selectedDeviceData.map(device => getShortName(device));
+            const data = selectedDeviceData.map(metricPath);
+            
+            if (window.performanceChart) {
+                window.performanceChart.destroy();
+            }
+            
+            window.performanceChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: metricLabel,
+                        data: data,
+                        backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
                         borderWidth: 1
-                    }},
-                    {{
-                        label: 'Read Throughput (MB/s)',
-                        data: {read_throughput_js},
-                        backgroundColor: 'rgba(153, 102, 255, 0.5)',
-                        borderColor: 'rgba(153, 102, 255, 1)',
-                        borderWidth: 1
-                    }}
-                ]
-            }},
-            options: {{
-                responsive: true,
-                scales: {{
-                    y: {{
-                        beginAtZero: true,
-                        title: {{
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: yAxisLabel
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
                             display: true,
-                            text: 'MB/s (higher is better)'
-                        }}
-                    }}
-                }},
-                plugins: {{
-                    title: {{
-                        display: true,
-                        text: 'Throughput Comparison'
-                    }}
-                }}
-            }}
-        }});
+                            text: `Selected Devices: ${metricLabel} Comparison`
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Chart update button
+        document.getElementById('update-chart').addEventListener('click', updatePerformanceChart);
+        
+        // Filter devices based on search, category and sort criteria
+        let filteredDevices = [];
+        
+        function filterDevices() {
+            const searchTerm = document.getElementById('search-devices').value.toLowerCase();
+            const category = document.getElementById('category-filter').value;
+            const sortBy = document.getElementById('sort-by').value;
+            
+            filteredDevices = allDevices.filter(device => {
+                // Search filter
+                const deviceName = device.device.friendly_name.toLowerCase();
+                const model = (device.device.model || '').toLowerCase();
+                const vendor = (device.device.vendor || '').toLowerCase();
+                
+                const matchesSearch = deviceName.includes(searchTerm) || 
+                                     model.includes(searchTerm) || 
+                                     vendor.includes(searchTerm);
+                
+                // Category filter
+                let matchesCategory = true;
+                if (category !== 'all') {
+                    let deviceVendor = vendor;
+                    if (deviceVendor === "(standard disk drives)") {
+                        // Extract vendor from model name
+                        const modelParts = model.split(' ');
+                        if (modelParts.length > 0) {
+                            deviceVendor = modelParts[0].toLowerCase();
+                        }
+                    }
+                    matchesCategory = deviceVendor.includes(category.toLowerCase());
+                }
+                
+                return matchesSearch && matchesCategory;
+            });
+            
+            // Sort devices
+            filteredDevices.sort((a, b) => {
+                switch(sortBy) {
+                    case 'read_throughput':
+                        return b.throughput.read_mbps - a.throughput.read_mbps;
+                    case 'write_throughput':
+                        return b.throughput.write_mbps - a.throughput.write_mbps;
+                    case 'read_latency':
+                        return a.latency.read_ms - b.latency.read_ms;
+                    case 'write_latency':
+                        return a.latency.write_ms - b.latency.write_ms;
+                    case 'random_latency':
+                        return a.latency.random_read_ms - b.latency.random_read_ms;
+                    default:
+                        return 0;
+                }
+            });
+        }
+        
+        // Display filtered devices with pagination
+        function displayDevices() {
+            filterDevices();
+            setupPagination();
+            
+            const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+            const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, filteredDevices.length);
+            const deviceSubset = filteredDevices.slice(startIndex, endIndex);
+            
+            const tableBody = document.querySelector('#summary-table tbody');
+            tableBody.innerHTML = '';
+            
+            deviceSubset.forEach((device, localIndex) => {
+                const deviceIndex = allDevices.findIndex(d => 
+                    d.device.friendly_name === device.device.friendly_name);
+                
+                if (deviceIndex === -1) return;
+                
+                const row = document.createElement('tr');
+                row.setAttribute('data-device-id', deviceIndex);
+                
+                // Format timestamp
+                let timestamp = device.timestamp;
+                if (timestamp.includes('T')) {
+                    timestamp = timestamp.split('T')[0] + ' ' + timestamp.split('T')[1].substring(0, 5);
+                }
+                
+                // Create row cells
+                row.innerHTML = `
+                    <td><label><input type="checkbox" class="device-selector" data-device-id="${deviceIndex}" 
+                        ${selectedDevices.includes(deviceIndex) ? 'checked' : ''}> ${device.device.friendly_name}</label></td>
+                    <td>${device.latency.write_ms.toFixed(2)}</td>
+                    <td>${device.latency.read_ms.toFixed(2)}</td>
+                    <td>${device.latency.random_read_ms.toFixed(2)}</td>
+                    <td>${device.throughput.write_mbps.toFixed(2)}</td>
+                    <td>${device.throughput.read_mbps.toFixed(2)}</td>
+                    <td class="timestamp">${timestamp}</td>
+                `;
+                
+                tableBody.appendChild(row);
+            });
+            
+            // Show message if no results
+            if (deviceSubset.length === 0) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td colspan="7" style="text-align: center;">No devices found matching your criteria</td>`;
+                tableBody.appendChild(row);
+            }
+        }
+        
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', function() {
+            displayDevices();
+        });
     </script>
 </body>
 </html>
@@ -432,13 +1226,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
     print(f"Report saved to {output_path}")
 
 def save_json_data(devices: List[Dict], output_path: str) -> None:
-    """
-    Save benchmark data to a JSON file.
-    
-    Args:
-        devices: List of device data dictionaries
-        output_path: Path where to save the JSON file
-    """
+    """Save benchmark data to a JSON file."""
     data = {"devices": devices}
     
     with open(output_path, 'w', encoding='utf-8') as f:
