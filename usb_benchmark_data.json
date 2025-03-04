@@ -1,0 +1,25 @@
+{
+  "devices": [
+    {
+      "timestamp": "2025-03-04T16:52:32.158923",
+      "device": {
+        "mount_point": "F:",
+        "device_path": null,
+        "vendor": "SanDisk",
+        "model": "Ultra USB Device",
+        "guid": "4C530001120815112203",
+        "size_bytes": 30746096640,
+        "friendly_name": "SanDisk Ultra USB Device"
+      },
+      "latency": {
+        "read_ms": 1.1,
+        "write_ms": 8.56,
+        "random_read_ms": 1.14
+      },
+      "throughput": {
+        "read_mbps": 2136.1,
+        "write_mbps": 41.13
+      }
+    }
+  ]
+}
