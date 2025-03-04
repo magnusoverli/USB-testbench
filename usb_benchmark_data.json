@@ -1,24 +1,44 @@
 {
   "devices": [
     {
-      "timestamp": "2025-03-04T16:52:32.158923",
       "device": {
+        "friendly_name": "(Standard disk drives) SanDisk Ultra USB Device",
         "mount_point": "F:",
-        "device_path": null,
-        "vendor": "SanDisk",
-        "model": "Ultra USB Device",
+        "vendor": "(Standard disk drives)",
+        "model": "SanDisk Ultra USB Device",
         "guid": "4C530001120815112203",
-        "size_bytes": 30746096640,
-        "friendly_name": "SanDisk Ultra USB Device"
+        "size_bytes": 30730491002
       },
       "latency": {
-        "read_ms": 1.1,
-        "write_ms": 8.56,
-        "random_read_ms": 1.14
+        "write_ms": 7.13,
+        "read_ms": 5.0,
+        "random_read_ms": 0.01
       },
       "throughput": {
-        "read_mbps": 2136.1,
-        "write_mbps": 41.13
+        "write_mbps": 45.19,
+        "read_mbps": 135.07
+      },
+      "timestamp": "2025-03-04 18:32"
+    },
+    {
+      "timestamp": "2025-03-04T18:33:56.198090",
+      "device": {
+        "mount_point": "G:",
+        "device_path": null,
+        "vendor": "(Standard disk drives)",
+        "model": "Kingston DataTraveler 3.0 USB Device",
+        "guid": "EE06DA5057E8",
+        "size_bytes": 61901216153,
+        "friendly_name": "(Standard disk drives) Kingston DataTraveler 3.0 USB Device"
+      },
+      "latency": {
+        "read_ms": 4.5496781667073565,
+        "write_ms": 13.431739807128906,
+        "random_read_ms": 0.006592273712158203
+      },
+      "throughput": {
+        "read_mbps": 90.63825687102151,
+        "write_mbps": 13.299236695260467
       }
     }
   ]

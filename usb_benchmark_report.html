@@ -72,7 +72,7 @@
 </head>
 <body>
     <h1>USB Memory Stick Benchmark Results</h1>
-    <p>Report generated on 2025-03-04 16:52:46</p>
+    <p>Report generated on 2025-03-04 18:33:56</p>
 
     <div class="summary-chart">
         <div class="chart">
@@ -94,37 +94,67 @@
             <th>Read Throughput (MB/s)</th>
             <th>Last Tested</th>
         </tr>
-
-        <tr class="best">
-            <td>SanDisk Ultra USB Device</td>
-            <td>8.56</td>
-            <td>1.1</td>
-            <td>1.14</td>
-            <td>41.13</td>
-            <td>2136.1</td>
-            <td class="timestamp">2025-03-04 16:52</td>
+        
+        <tr>
+            <td>(Standard disk drives) SanDisk Ultra USB Device</td>
+            <td>7.13</td>
+            <td>5.00</td>
+            <td>0.01</td>
+            <td>45.19</td>
+            <td>135.07</td>
+            <td class="timestamp">2025-03-04 18:32</td>
         </tr>
+        
+        <tr>
+            <td>(Standard disk drives) Kingston DataTraveler 3.0 USB Device</td>
+            <td>13.43</td>
+            <td>4.55</td>
+            <td>0.01</td>
+            <td>13.30</td>
+            <td>90.64</td>
+            <td class="timestamp">2025-03-04 18:33</td>
+        </tr>
+        
     </table>
 
     <h2>Detailed Device Information</h2>
-
-    <div class="device-info">
-        <h3>SanDisk Ultra USB Device</h3>
-        <p><strong>Vendor:</strong> SanDisk</p>
-        <p><strong>Model:</strong> Ultra USB Device</p>
-        <p><strong>Mount Point:</strong> F:</p>
-        <p><strong>Device Path:</strong> None</p>
-        <p><strong>GUID:</strong> 4C530001120815112203</p>
-        <p><strong>Size:</strong> 28.63 GB</p>
-        <p><strong>Last Tested:</strong> 2025-03-04 16:52:32</p>
+    
+        <div class="device-info">
+            <h3>(Standard disk drives) SanDisk Ultra USB Device</h3>
+            <p><strong>Vendor:</strong> (Standard disk drives)</p>
+            <p><strong>Model:</strong> SanDisk Ultra USB Device</p>
+            <p><strong>Mount Point:</strong> F:</p>
+            <p><strong>Device Path:</strong> None</p>
+            <p><strong>GUID:</strong> 4C530001120815112203</p>
+            <p><strong>Size:</strong> 28.62 GB</p>
+            <p><strong>Last Tested:</strong> 2025-03-04 18:32</p>
+            
+            <h4>Performance Results</h4>
+            <p><strong>Write Latency:</strong> 7.13 ms</p>
+            <p><strong>Read Latency:</strong> 5.00 ms</p>
+            <p><strong>Random Read Latency:</strong> 0.01 ms</p>
+            <p><strong>Write Throughput:</strong> 45.19 MB/s</p>
+            <p><strong>Read Throughput:</strong> 135.07 MB/s</p>
+        </div>
         
-        <h4>Performance Results</h4>
-        <p><strong>Write Latency:</strong> 8.56 ms</p>
-        <p><strong>Read Latency:</strong> 1.1 ms</p>
-        <p><strong>Random Read Latency:</strong> 1.14 ms</p>
-        <p><strong>Write Throughput:</strong> 41.13 MB/s</p>
-        <p><strong>Read Throughput:</strong> 2136.1 MB/s</p>
-    </div>
+        <div class="device-info">
+            <h3>(Standard disk drives) Kingston DataTraveler 3.0 USB Device</h3>
+            <p><strong>Vendor:</strong> (Standard disk drives)</p>
+            <p><strong>Model:</strong> Kingston DataTraveler 3.0 USB Device</p>
+            <p><strong>Mount Point:</strong> G:</p>
+            <p><strong>Device Path:</strong> None</p>
+            <p><strong>GUID:</strong> EE06DA5057E8</p>
+            <p><strong>Size:</strong> 57.65 GB</p>
+            <p><strong>Last Tested:</strong> 2025-03-04 18:33</p>
+            
+            <h4>Performance Results</h4>
+            <p><strong>Write Latency:</strong> 13.43 ms</p>
+            <p><strong>Read Latency:</strong> 4.55 ms</p>
+            <p><strong>Random Read Latency:</strong> 0.01 ms</p>
+            <p><strong>Write Throughput:</strong> 13.30 MB/s</p>
+            <p><strong>Read Throughput:</strong> 90.64 MB/s</p>
+        </div>
+        
 
     <script>
         // Latency Chart
@@ -132,25 +162,25 @@
         new Chart(latencyCtx, {
             type: 'bar',
             data: {
-                labels: ["SanDisk Ultra USB Device"],
+                labels: ["(Standard disk drives) SanDisk Ultra USB Device", "(Standard disk drives) Kingston DataTraveler 3.0 USB Device"],
                 datasets: [
                     {
                         label: 'Write Latency (ms)',
-                        data: [8.56],
+                        data: [7.13, 13.431739807128906],
                         backgroundColor: 'rgba(255, 99, 132, 0.5)',
                         borderColor: 'rgba(255, 99, 132, 1)',
                         borderWidth: 1
                     },
                     {
                         label: 'Read Latency (ms)',
-                        data: [1.1],
+                        data: [5.0, 4.5496781667073565],
                         backgroundColor: 'rgba(54, 162, 235, 0.5)',
                         borderColor: 'rgba(54, 162, 235, 1)',
                         borderWidth: 1
                     },
                     {
                         label: 'Random Read Latency (ms)',
-                        data: [1.14],
+                        data: [0.01, 0.006592273712158203],
                         backgroundColor: 'rgba(255, 206, 86, 0.5)',
                         borderColor: 'rgba(255, 206, 86, 1)',
                         borderWidth: 1
@@ -182,18 +212,18 @@
         new Chart(throughputCtx, {
             type: 'bar',
             data: {
-                labels: ["SanDisk Ultra USB Device"],
+                labels: ["(Standard disk drives) SanDisk Ultra USB Device", "(Standard disk drives) Kingston DataTraveler 3.0 USB Device"],
                 datasets: [
                     {
                         label: 'Write Throughput (MB/s)',
-                        data: [41.13],
+                        data: [45.19, 13.299236695260467],
                         backgroundColor: 'rgba(75, 192, 192, 0.5)',
                         borderColor: 'rgba(75, 192, 192, 1)',
                         borderWidth: 1
                     },
                     {
                         label: 'Read Throughput (MB/s)',
-                        data: [2136.1],
+                        data: [135.07, 90.63825687102151],
                         backgroundColor: 'rgba(153, 102, 255, 0.5)',
                         borderColor: 'rgba(153, 102, 255, 1)',
                         borderWidth: 1
