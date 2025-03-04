@@ -21,24 +21,24 @@
       "timestamp": "2025-03-04 18:32"
     },
     {
-      "timestamp": "2025-03-04T18:33:56.198090",
+      "timestamp": "2025-03-04T18:42:22.964094",
       "device": {
-        "mount_point": "G:",
+        "mount_point": "F:",
         "device_path": null,
         "vendor": "(Standard disk drives)",
         "model": "Kingston DataTraveler 3.0 USB Device",
-        "guid": "EE06DA5057E8",
-        "size_bytes": 61901216153,
+        "guid": "EE03DC505CE8",
+        "size_bytes": 15483357102,
         "friendly_name": "(Standard disk drives) Kingston DataTraveler 3.0 USB Device"
       },
       "latency": {
-        "read_ms": 4.5496781667073565,
-        "write_ms": 13.431739807128906,
-        "random_read_ms": 0.006592273712158203
+        "read_ms": 4.35177485148112,
+        "write_ms": 19.46374575297038,
+        "random_read_ms": 0.007975101470947266
       },
       "throughput": {
-        "read_mbps": 90.63825687102151,
-        "write_mbps": 13.299236695260467
+        "read_mbps": 108.80219550160288,
+        "write_mbps": 25.656339003499255
       }
     }
   ]

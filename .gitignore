@@ -6,3 +6,5 @@ __pycache__/
 .vscode/
 env/
 venv/
+usb_benchmark_data.json
+usb_benchmark_report.html
