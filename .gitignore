@@ -4,6 +4,7 @@ __pycache__/
 *.json
 *.html
 .vscode/
+*.db
 env/
 venv/
 usb_benchmark_data.json
