@@ -1148,21 +1148,21 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             createCustomChart();
         }});
         
-        function createCustomChart() {
-            try {
+        function createCustomChart() {{
+            try {{
                 console.log("Creating custom chart for selected devices:", selectedDevices);
                 const ctx = document.getElementById('performanceChart').getContext('2d');
                 const metric = document.getElementById('chart-metric').value;
                 
-                if (!ctx) {
+                if (!ctx) {{
                     console.error("Canvas context not found");
                     alert("Error: Could not find the chart canvas");
                     return;
-                }
+                }}
                 
                 let metricPath, metricLabel, yAxisLabel;
                 
-                switch(metric) {
+                switch(metric) {{
                     case 'read_throughput':
                         metricPath = device => device.throughput.read_mbps;
                         metricLabel = 'Read Throughput';
@@ -1192,96 +1192,96 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
                         console.error("Unknown metric:", metric);
                         alert("Error: Unknown metric selected");
                         return;
-                }
+                }}
                 
                 // Get data for selected devices
                 const selectedDeviceData = [];
-                for (const id of selectedDevices) {
-                    if (allDevices[id]) {
+                for (const id of selectedDevices) {{
+                    if (allDevices[id]) {{
                         selectedDeviceData.push(allDevices[id]);
-                    } else {
+                    }} else {{
                         console.warn("Device not found:", id);
-                    }
-                }
+                    }}
+                }}
                 
                 console.log("Selected device data:", selectedDeviceData);
                 
-                if (selectedDeviceData.length === 0) {
+                if (selectedDeviceData.length === 0) {{
                     alert("No valid devices selected for charting");
                     return;
-                }
+                }}
                 
                 // Get labels and data, handling potential errors
                 const labels = [];
                 const data = [];
-                for (const device of selectedDeviceData) {
-                    try {
+                for (const device of selectedDeviceData) {{
+                    try {{
                         // Use friendly name as fallback if getShortName fails
                         let shortName;
-                        try {
+                        try {{
                             shortName = getShortName(device);
-                        } catch (e) {
+                        }} catch (e) {{
                             console.warn("Error in getShortName:", e);
                             shortName = device.device.friendly_name || "Unknown Device";
-                        }
+                        }}
                         labels.push(shortName);
                         
                         // Get metric value safely
                         const metricValue = metricPath(device);
                         data.push(metricValue !== null && metricValue !== undefined ? metricValue : 0);
-                    } catch (e) {
+                    }} catch (e) {{
                         console.error("Error processing device data:", e, device);
-                    }
-                }
+                    }}
+                }}
                 
                 console.log("Chart labels:", labels);
                 console.log("Chart data:", data);
                 
                 // Destroy existing chart if it exists
-                if (window.performanceChart) {
+                if (window.performanceChart) {{
                     window.performanceChart.destroy();
-                }
+                }}
                 
                 // Create new chart
-                window.performanceChart = new Chart(ctx, {
+                window.performanceChart = new Chart(ctx, {{
                     type: 'bar',
-                    data: {
+                    data: {{
                         labels: labels,
-                        datasets: [{
+                        datasets: [{{
                             label: metricLabel,
                             data: data,
                             backgroundColor: 'rgba(54, 162, 235, 0.5)',
                             borderColor: 'rgba(54, 162, 235, 1)',
                             borderWidth: 1
-                        }]
-                    },
-                    options: {
+                        }}]
+                    }},
+                    options: {{
                         responsive: true,
                         maintainAspectRatio: false,
-                        scales: {
-                            y: {
+                        scales: {{
+                            y: {{
                                 beginAtZero: true,
-                                title: {
+                                title: {{
                                     display: true,
                                     text: yAxisLabel
-                                }
-                            }
-                        },
-                        plugins: {
-                            title: {
+                                }}
+                            }}
+                        }},
+                        plugins: {{
+                            title: {{
                                 display: true,
-                                text: `Selected Devices: ${metricLabel} Comparison`
-                            }
-                        }
-                    }
-                });
+                                text: `Selected Devices: ${{metricLabel}} Comparison`
+                            }}
+                        }}
+                    }}
+                }});
                 
                 console.log("Chart created successfully");
-            } catch (e) {
+            }} catch (e) {{
                 console.error("Error creating chart:", e);
                 alert("Error creating chart: " + e.message);
-            }
-        }
+            }}
+        }}
         
         // Chart update button
         document.getElementById('update-chart').addEventListener('click', updatePerformanceChart);
@@ -1377,6 +1377,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
                     <td>${{device.throughput.write_mbps.toFixed(2)}}</td>
                     <td>${{device.throughput.read_mbps.toFixed(2)}}</td>
                     <td class="timestamp">${{timestamp}}</td>
+                    <td><button class="btn-action remove-device" data-device-id="${{deviceIndex}}" title="Remove this device from the report">Remove</button></td>
                 `;
                 
                 tableBody.appendChild(row);
@@ -1385,7 +1386,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             // Show message if no results
             if (deviceSubset.length === 0) {{
                 const row = document.createElement('tr');
-                row.innerHTML = `<td colspan="7" style="text-align: center;">No devices found matching your criteria</td>`;
+                row.innerHTML = `<td colspan="8" style="text-align: center;">No devices found matching your criteria</td>`;
                 tableBody.appendChild(row);
             }}
         }}
@@ -1395,38 +1396,38 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             displayDevices();
         }});
 
-        document.addEventListener('click', function(e) {
-            if (e.target.classList.contains('remove-device')) {
-                const deviceId = parseInt(e.target.dataset.deviceId);
-                const deviceName = allDevices[deviceId].device.friendly_name;
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('remove-device')) {
+            const deviceId = parseInt(e.target.dataset.deviceId);
+            const deviceName = allDevices[deviceId].device.friendly_name;
+            
+            if (confirm(`Are you sure you want to remove "${deviceName}" from the report?`)) {
+                // Create a form to submit the removal request
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = 'remove_device.py';
+                form.style.display = 'none';
                 
-                if (confirm(`Are you sure you want to remove "${deviceName}" from the report?`)) {
-                    // Create a form to submit the removal request
-                    const form = document.createElement('form');
-                    form.method = 'POST';
-                    form.action = 'remove_device.py';
-                    form.style.display = 'none';
-                    
-                    // Add the device ID
-                    const idField = document.createElement('input');
-                    idField.type = 'hidden';
-                    idField.name = 'device_id';
-                    idField.value = deviceId;
-                    form.appendChild(idField);
-                    
-                    // Add script path as reference
-                    const scriptPath = document.createElement('input');
-                    scriptPath.type = 'hidden';
-                    scriptPath.name = 'script_path';
-                    scriptPath.value = window.location.pathname;
-                    form.appendChild(scriptPath);
-                    
-                    // Submit the form
-                    document.body.appendChild(form);
-                    form.submit();
-                }
+                // Add the device ID
+                const idField = document.createElement('input');
+                idField.type = 'hidden';
+                idField.name = 'device_id';
+                idField.value = deviceId;
+                form.appendChild(idField);
+                
+                // Add script path as reference
+                const scriptPath = document.createElement('input');
+                scriptPath.type = 'hidden';
+                scriptPath.name = 'script_path';
+                scriptPath.value = window.location.pathname;
+                form.appendChild(scriptPath);
+                
+                // Submit the form
+                document.body.appendChild(form);
+                form.submit();
             }
-        });
+        }
+    });
     </script>
 </body>
 </html>

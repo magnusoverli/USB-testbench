@@ -172,13 +172,14 @@ def main():
                 script_dir = os.path.dirname(os.path.abspath(__file__))
                 html_report_path = os.path.join(script_dir, "usb_benchmark_report.html")
                 json_data_path = os.path.join(script_dir, "usb_benchmark_data.json")
-                
+
                 # Check if the report already exists
                 existing_devices = parse_existing_report(html_report_path)
                 device_index = device_exists(existing_devices, device_data)
-                
+
                 if device_index >= 0:
-                    print(f"\nThis device '{device_data['device']['friendly_name']}' already exists in the report.")
+                    device_name = device_data['device']['friendly_name']
+                    print(f"\nThis device '{device_name}' already exists in the report.")
                     replace = input("Do you want to replace the existing results? (y/n) [n]: ").strip().lower() == 'y'
                     
                     if replace:

@@ -10,7 +10,7 @@ import shutil
 import json
 import ctypes
 import gc
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 # Add Win32 API imports for direct disk access (bypassing cache)
 try:
@@ -178,7 +178,7 @@ def clear_cache():
     # Shorter sleep time
     time.sleep(0.25)  # Reduced from 1s to 0.25s
 
-def read_with_no_buffering(file_path: str, file_size_bytes: int) -> tuple:
+def read_with_no_buffering(file_path: str, file_size_bytes: int) -> Tuple[float, float]:
     """
     Read a file with Windows cache disabled using direct I/O.
     
