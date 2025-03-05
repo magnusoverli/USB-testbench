@@ -1,3 +1,5 @@
 pywin32==308
 typing_extensions==4.12.2
 WMI==1.5.1
+Flask==2.3.3
+Werkzeug==2.3.7
