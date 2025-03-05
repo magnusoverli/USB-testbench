@@ -5,19 +5,11 @@ This tool benchmarks USB flash drives for read/write performance and latency.
 """
 import os
 import time
-import webbrowser
 from typing import Dict, Any
 
 # Import modules
 from utils import get_usb_drives, select_drive, clear_cache, display_results, HAS_WIN32
 from benchmark import write_benchmark, read_benchmark, random_seek_benchmark
-from report import (
-    parse_existing_report, 
-    device_exists, 
-    convert_benchmarks_to_device_data, 
-    generate_html_report,
-    save_json_data
-)
 
 def main():
     """Main function for the USB flash drive benchmark tool."""
@@ -159,59 +151,6 @@ def main():
             print("\nNOTE: For more accurate read throughput tests, install PyWin32:")
             print("      pip install pywin32")
             
-        # Generate HTML report
-        print("\nWould you like to save the benchmark results to an HTML report?")
-        save_report = input("This will create or update usb_benchmark_report.html (y/n) [y]: ").strip().lower() != 'n'
-        
-        if save_report:
-            try:
-                # Generate a device data object from benchmark results
-                device_data = convert_benchmarks_to_device_data(selected_drive, write_results, read_results, seek_results)
-                
-                # Define the report paths (same directory as script)
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                html_report_path = os.path.join(script_dir, "usb_benchmark_report.html")
-                json_data_path = os.path.join(script_dir, "usb_benchmark_data.json")
-
-                # Check if the report already exists
-                existing_devices = parse_existing_report(html_report_path)
-                device_index = device_exists(existing_devices, device_data)
-
-                if device_index >= 0:
-                    device_name = device_data['device']['friendly_name']
-                    print(f"\nThis device '{device_name}' already exists in the report.")
-                    replace = input("Do you want to replace the existing results? (y/n) [n]: ").strip().lower() == 'y'
-                    
-                    if replace:
-                        print("Replacing existing results...")
-                        existing_devices[device_index] = device_data
-                    else:
-                        print("Keeping existing results. New data will not be added to the report.")
-                else:
-                    print(f"\nAdding new device '{device_data['device']['friendly_name']}' to the report.")
-                    existing_devices.append(device_data)
-                
-                # Generate the HTML report with updated data
-                generate_html_report(existing_devices, html_report_path)
-                
-                # Save as JSON for programmatic access
-                save_json_data(existing_devices, json_data_path)
-                
-                print(f"\nBenchmark report saved to: {html_report_path}")
-                print(f"Benchmark data saved to: {json_data_path}")
-                
-                # Try to open the report in the default browser
-                try:
-                    open_report = input("Would you like to open the report now? (y/n) [y]: ").strip().lower() != 'n'
-                    if open_report:
-                        webbrowser.open('file://' + os.path.abspath(html_report_path))
-                except Exception as e:
-                    print(f"Could not open browser: {e}")
-                    
-            except Exception as e:
-                print(f"Error saving benchmark report: {e}")
-                print("Make sure you have beautifulsoup4 installed: pip install beautifulsoup4")
-                
     except Exception as e:
         print(f"Error during benchmark: {e}")
         print("Benchmark failed. Please check if the drive is still connected and has sufficient space.")
