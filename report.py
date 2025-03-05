@@ -82,11 +82,77 @@ def parse_existing_report(report_path: str) -> List[Dict]:
 def device_exists(devices: List[Dict], new_device: Dict) -> int:
     """Check if device exists in list. Returns index if found, otherwise -1."""
     for i, device in enumerate(devices):
-        if (device['device']['friendly_name'] == new_device['device']['friendly_name'] or
-            (device['device'].get('guid') and new_device['device'].get('guid') and 
-             device['device']['guid'] == new_device['device']['guid'])):
+        # Primary check: SerialNumber/GUID if available
+        if (device['device'].get('guid') and new_device['device'].get('guid') and 
+            device['device']['guid'] == new_device['device']['guid']):
             return i
+            
+        # Secondary check: Disk signature if available
+        if (device['device'].get('signature') and new_device['device'].get('signature') and
+            device['device']['signature'] == new_device['device']['signature']):
+            return i
+            
+        # Tertiary check: Model + Size combo (less reliable)
+        if (device['device'].get('model') == new_device['device'].get('model') and
+            device['device'].get('size_bytes') and new_device['device'].get('size_bytes') and
+            abs(device['device']['size_bytes'] - new_device['device']['size_bytes']) < 1024*1024*10): # 10MB tolerance
+            
+            # Additional check to reduce false positives - check volume name if available
+            if (device['device'].get('volume_name') and new_device['device'].get('volume_name') and
+                device['device']['volume_name'] == new_device['device']['volume_name']):
+                return i
+                
+        # Fallback: Friendly name + size (least reliable)
+        if (device['device']['friendly_name'] == new_device['device']['friendly_name'] and
+            device['device'].get('size_bytes') and new_device['device'].get('size_bytes') and
+            abs(device['device']['size_bytes'] - new_device['device']['size_bytes']) < 1024*1024*10): # 10MB tolerance
+            return i
+            
     return -1
+
+def generate_device_fingerprint(device: Dict) -> str:
+    """
+    Generate a unique fingerprint for a device using available attributes.
+    Returns a string hash that should be consistent for the same physical device.
+    """
+    # Collect all potential identifying attributes
+    fingerprint_parts = []
+    
+    # Basic attributes that should be in every device
+    if device['device'].get('mount_point'):
+        fingerprint_parts.append(f"mount:{device['device']['mount_point']}")
+        
+    if device['device'].get('model'):
+        fingerprint_parts.append(f"model:{device['device']['model']}")
+        
+    if device['device'].get('vendor'):
+        fingerprint_parts.append(f"vendor:{device['device']['vendor']}")
+        
+    if device['device'].get('size_bytes'):
+        # Round to nearest MB to account for minor size differences
+        size_mb = device['device']['size_bytes'] // (1024 * 1024)
+        fingerprint_parts.append(f"size_mb:{size_mb}")
+        
+    # Extended attributes that may be available from our enhanced detection
+    extended_attrs = [
+        'disk_index', 'device_id', 'volume_id', 'hardware_id', 'instance_id', 
+        'disk_signature', 'firmware_version', 'physical_sector_size'
+    ]
+    
+    for attr in extended_attrs:
+        if device['device'].get(attr):
+            fingerprint_parts.append(f"{attr}:{device['device'][attr]}")
+            
+    # If we have enough identifying information, compute a fingerprint
+    if len(fingerprint_parts) >= 3:  # Need at least 3 attributes for reliability
+        # Sort to ensure consistent order
+        fingerprint_parts.sort()
+        # Join all parts and create a hash
+        import hashlib
+        fingerprint_str = "|".join(fingerprint_parts)
+        return hashlib.md5(fingerprint_str.encode()).hexdigest()
+        
+    return None
 
 def convert_benchmarks_to_device_data(drive_info: Dict, write_results: Dict, read_results: Dict, seek_results: Dict) -> Dict:
     """Convert benchmark results to device data format."""
@@ -100,6 +166,13 @@ def convert_benchmarks_to_device_data(drive_info: Dict, write_results: Dict, rea
     if friendly_name == "Unknown Unknown Device":
         friendly_name = f"Drive {drive_info['DriveLetter']}"
     
+    # Add uniqueness identifiers to friendly name if serial number is missing
+    if not drive_info.get('SerialNumber'):
+        if drive_info.get('Signature'):
+            friendly_name += f" [Sig:{drive_info['Signature']}]"
+        elif drive_info.get('FirmwareRevision'):
+            friendly_name += f" [FW:{drive_info['FirmwareRevision']}]"
+    
     # Create device data object
     device_data = {
         'timestamp': datetime.datetime.now().isoformat(),
@@ -109,6 +182,12 @@ def convert_benchmarks_to_device_data(drive_info: Dict, write_results: Dict, rea
             'vendor': vendor,
             'model': model,
             'guid': drive_info.get('SerialNumber', None),
+            'signature': drive_info.get('Signature', None),
+            'firmware_revision': drive_info.get('FirmwareRevision', None),
+            'pnp_device_id': drive_info.get('PNPDeviceID', None),
+            'interface_type': drive_info.get('InterfaceType', None),
+            'media_type': drive_info.get('MediaType', None),
+            'volume_name': drive_info.get('VolumeName', None),
             'size_bytes': size_bytes,
             'friendly_name': friendly_name
         },
@@ -134,6 +213,46 @@ def get_short_name(device: Dict) -> str:
         return model_name
     else:
         return device['device']['friendly_name'].split()[-1] if ' ' in device['device']['friendly_name'] else device['device']['friendly_name']
+
+def remove_device_from_report(report_path: str, json_path: str, device_index: int) -> bool:
+    """
+    Remove a device from the HTML report and JSON data file.
+    
+    Args:
+        report_path: Path to the HTML report file
+        json_path: Path to the JSON data file
+        device_index: Index of the device to remove
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Parse existing devices
+        devices = parse_existing_report(report_path)
+        
+        # Validate index
+        if device_index < 0 or device_index >= len(devices):
+            print(f"Invalid device index: {device_index}")
+            return False
+            
+        # Get device info for logging
+        device_name = devices[device_index]['device']['friendly_name']
+        
+        # Remove the device
+        devices.pop(device_index)
+        
+        # Generate new report
+        generate_html_report(devices, report_path)
+        
+        # Update JSON data
+        save_json_data(devices, json_path)
+        
+        print(f"Successfully removed device '{device_name}' from the report")
+        return True
+        
+    except Exception as e:
+        print(f"Error removing device: {e}")
+        return False
 
 def categorize_devices(devices: List[Dict]) -> Dict[str, List[Dict]]:
     """Group devices by manufacturer or other suitable category."""
@@ -173,7 +292,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
     
     # Create device rows for the summary table
     device_rows = ""
-    
+
     for i, device in enumerate(sorted_devices):
         # Skip devices with missing data
         if (device['latency'].get('read_ms') is None or 
@@ -189,7 +308,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
         if 'T' in timestamp:
             timestamp = timestamp.split('T')[0] + ' ' + timestamp.split('T')[1][:5]
         
-        # Add row to table
+        # Add row to table with Remove button
         device_rows += f"""
         <tr data-device-id="{i}">
             <td><label><input type="checkbox" class="device-selector" data-device-id="{i}"> {device_name}</label></td>
@@ -199,6 +318,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             <td>{device['throughput']['write_mbps']:.2f}</td>
             <td>{device['throughput']['read_mbps']:.2f}</td>
             <td class="timestamp">{timestamp}</td>
+            <td><button class="btn-action remove-device" data-device-id="{i}" title="Remove this device from the report">Remove</button></td>
         </tr>
         """
     
@@ -475,7 +595,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             font-size: 12px;
         }}
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js" integrity="sha256-+8RZJua0aEWg+QVVKg4LEzEEm/8RFez5Tb4JBNiV5xA=" crossorigin="anonymous"></script>
 </head>
 <body>
     <h1>USB Memory Stick Benchmark Results</h1>
@@ -519,6 +639,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
                         <th>Write Throughput (MB/s)</th>
                         <th>Read Throughput (MB/s)</th>
                         <th>Last Tested</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -637,21 +758,21 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
         let currentPage = 1;
         
         // Helper function to get short device name
-        function getShortName(device) {
+        function getShortName(device) {{
             const model = device.device.model;
-            if (model && model.startsWith("(Standard disk drives) ")) {
+            if (model && model.startsWith("(Standard disk drives) ")) {{
                 return model.replace("(Standard disk drives) ", "");
-            } else if (model) {
+            }} else if (model) {{
                 return model;
-            } else {
+            }} else {{
                 const fullName = device.device.friendly_name;
                 return fullName.includes(' ') ? fullName.split(' ').pop() : fullName;
-            }
-        }
+            }}
+        }}
         
         // Initialize tabs
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(tab => {{
+            tab.addEventListener('click', () => {{
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
                 document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                 
@@ -659,16 +780,16 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
                 document.getElementById(tab.dataset.tab).classList.add('active');
                 
                 // Initialize charts when tab is selected
-                if (tab.dataset.tab === 'dashboard') {
+                if (tab.dataset.tab === 'dashboard') {{
                     initializeDashboardChart();
-                } else if (tab.dataset.tab === 'charts') {
+                }} else if (tab.dataset.tab === 'charts') {{
                     updatePerformanceChart();
-                }
-            });
-        });
+                }}
+            }});
+        }});
         
         // Initialize dashboard chart
-        function initializeDashboardChart() {
+        function initializeDashboardChart() {{
             const ctx = document.getElementById('topDevicesChart').getContext('2d');
             const topReadDevices = [...allDevices].sort((a, b) => 
                 b.throughput.read_mbps - a.throughput.read_mbps).slice(0, 5);
@@ -677,62 +798,62 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             const readData = topReadDevices.map(device => device.throughput.read_mbps);
             const writeData = topReadDevices.map(device => device.throughput.write_mbps);
             
-            if (window.topDevicesChart) {
+            if (window.topDevicesChart) {{
                 window.topDevicesChart.destroy();
-            }
+            }}
             
-            window.topDevicesChart = new Chart(ctx, {
+            window.topDevicesChart = new Chart(ctx, {{
                 type: 'bar',
-                data: {
+                data: {{
                     labels: labels,
                     datasets: [
-                        {
+                        {{
                             label: 'Read Throughput (MB/s)',
                             data: readData,
                             backgroundColor: 'rgba(153, 102, 255, 0.5)',
                             borderColor: 'rgba(153, 102, 255, 1)',
                             borderWidth: 1
-                        },
-                        {
+                        }},
+                        {{
                             label: 'Write Throughput (MB/s)',
                             data: writeData,
                             backgroundColor: 'rgba(75, 192, 192, 0.5)',
                             borderColor: 'rgba(75, 192, 192, 1)',
                             borderWidth: 1
-                        }
+                        }}
                     ]
-                },
-                options: {
+                }},
+                options: {{
                     responsive: true,
                     maintainAspectRatio: false,
-                    scales: {
-                        y: {
+                    scales: {{
+                        y: {{
                             beginAtZero: true,
-                            title: {
+                            title: {{
                                 display: true,
                                 text: 'MB/s'
-                            }
-                        }
-                    },
-                    plugins: {
-                        title: {
+                            }}
+                        }}
+                    }},
+                    plugins: {{
+                        title: {{
                             display: true,
                             text: 'Top 5 Devices by Read Throughput'
-                        }
-                    }
-                }
-            });
-        }
+                        }}
+                    }}
+                }}
+            }});
+        }}
         
         // Update performance chart based on selected options
-        function updatePerformanceChart() {
+        function updatePerformanceChart() {{
             const metric = document.getElementById('chart-metric').value;
             const limit = document.getElementById('chart-limit').value;
             const ctx = document.getElementById('performanceChart').getContext('2d');
             
             let metricPath, metricLabel, sortDirection, yAxisLabel;
             
-            switch(metric) {
+            switch(metric) {{
                 case 'read_throughput':
                     metricPath = device => device.throughput.read_mbps;
                     metricLabel = 'Read Throughput';
@@ -763,79 +884,79 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
                     sortDirection = 1; // Lower is better
                     yAxisLabel = 'ms (lower is better)';
                     break;
-            }
+            }}
             
             // Sort and limit devices
             let devicesToChart = [...allDevices].sort((a, b) => 
                 sortDirection * (metricPath(a) - metricPath(b))
             );
             
-            if (limit !== 'all') {
+            if (limit !== 'all') {{
                 devicesToChart = devicesToChart.slice(0, parseInt(limit));
-            }
+            }}
             
             const labels = devicesToChart.map(device => getShortName(device));
             const data = devicesToChart.map(metricPath);
             
-            if (window.performanceChart) {
+            if (window.performanceChart) {{
                 window.performanceChart.destroy();
-            }
+            }}
             
-            window.performanceChart = new Chart(ctx, {
+            window.performanceChart = new Chart(ctx, {{
                 type: 'bar',
-                data: {
+                data: {{
                     labels: labels,
-                    datasets: [{
+                    datasets: [{{
                         label: metricLabel,
                         data: data,
                         backgroundColor: 'rgba(54, 162, 235, 0.5)',
                         borderColor: 'rgba(54, 162, 235, 1)',
                         borderWidth: 1
-                    }]
-                },
-                options: {
+                    }}]
+                }},
+                options: {{
                     responsive: true,
                     maintainAspectRatio: false,
-                    scales: {
-                        y: {
+                    scales: {{
+                        y: {{
                             beginAtZero: true,
-                            title: {
+                            title: {{
                                 display: true,
                                 text: yAxisLabel
-                            }
-                        },
-                        x: {
-                            ticks: {
+                            }}
+                        }},
+                        x: {{
+                            ticks: {{
                                 autoSkip: false,
                                 maxRotation: 45,
                                 minRotation: 45
-                            }
-                        }
-                    },
-                    plugins: {
-                        title: {
+                            }}
+                        }}
+                    }},
+                    plugins: {{
+                        title: {{
                             display: true,
-                            text: `${metricLabel} Comparison`
-                        }
-                    }
-                }
-            });
-        }
+                            text: `${{metricLabel}} Comparison`
+                        }}
+                    }}
+                }}
+            }});
+        }}
         
         // Device details selector
-        document.getElementById('device-selector').addEventListener('change', function() {
+        document.getElementById('device-selector').addEventListener('change', function() {{
             const deviceId = this.value;
-            document.querySelectorAll('.device-detail').forEach(detail => {
+            document.querySelectorAll('.device-detail').forEach(detail => {{
                 detail.style.display = 'none';
-            });
+            }});
             
-            if (deviceId) {
-                document.getElementById(`device-${deviceId}`).style.display = 'block';
-            }
-        });
+            if (deviceId) {{
+                document.getElementById(`device-${{deviceId}}`).style.display = 'block';
+            }}
+        }});
         
         // Setup pagination
-        function setupPagination() {
+        function setupPagination() {{
             const totalPages = Math.ceil(filteredDevices.length / ITEMS_PER_PAGE);
             const pagination = document.getElementById('summary-pagination');
             pagination.innerHTML = '';
@@ -846,45 +967,45 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             const prevBtn = document.createElement('button');
             prevBtn.textContent = '«';
             prevBtn.disabled = currentPage === 1;
-            prevBtn.addEventListener('click', () => {
-                if (currentPage > 1) {
+            prevBtn.addEventListener('click', () => {{
+                if (currentPage > 1) {{
                     currentPage--;
                     displayDevices();
-                }
-            });
+                }}
+            }});
             pagination.appendChild(prevBtn);
             
             // Page buttons
-            for (let i = 1; i <= totalPages; i++) {
+            for (let i = 1; i <= totalPages; i++) {{
                 const pageBtn = document.createElement('button');
                 pageBtn.textContent = i;
                 pageBtn.classList.toggle('active', i === currentPage);
-                pageBtn.addEventListener('click', () => {
+                pageBtn.addEventListener('click', () => {{
                     currentPage = i;
                     displayDevices();
-                });
+                }});
                 pagination.appendChild(pageBtn);
-            }
+            }}
             
             // Next button
             const nextBtn = document.createElement('button');
             nextBtn.textContent = '»';
             nextBtn.disabled = currentPage === totalPages;
-            nextBtn.addEventListener('click', () => {
-                if (currentPage < totalPages) {
+            nextBtn.addEventListener('click', () => {{
+                if (currentPage < totalPages) {{
                     currentPage++;
                     displayDevices();
-                }
-            });
+                }}
+            }});
             pagination.appendChild(nextBtn);
-        }
+        }}
         
         // Selected devices for comparison
-        document.getElementById('compare-selected').addEventListener('click', () => {
-            if (selectedDevices.length === 0) {
+        document.getElementById('compare-selected').addEventListener('click', () => {{
+            if (selectedDevices.length === 0) {{
                 alert('Please select at least one device to compare');
                 return;
-            }
+            }}
             
             // Show comparison tab
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -893,129 +1014,129 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             document.getElementById('comparison').classList.add('active');
             
             // Clear previous comparison
-            for (let i = 0; i < 5; i++) {
-                document.getElementById(`comparison-device-${i}`).textContent = `Device ${i+1}`;
-                document.getElementById(`comparison-device-${i}`).style.fontWeight = 'normal';
-            }
+            for (let i = 0; i < 5; i++) {{
+                document.getElementById(`comparison-device-${{i}}`).textContent = `Device ${{i+1}}`;
+                document.getElementById(`comparison-device-${{i}}`).style.fontWeight = 'normal';
+            }}
             
-            document.querySelectorAll('.comparison-slot').forEach(slot => {
+            document.querySelectorAll('.comparison-slot').forEach(slot => {{
                 slot.textContent = '';
                 slot.classList.remove('highlight');
-            });
+            }});
             
             // Fill in comparison
-            selectedDevices.slice(0, 5).forEach((deviceId, index) => {
+            selectedDevices.slice(0, 5).forEach((deviceId, index) => {{
                 const device = allDevices[deviceId];
-                document.getElementById(`comparison-device-${index}`).textContent = getShortName(device);
-                document.getElementById(`comparison-device-${index}`).style.fontWeight = 'bold';
+                document.getElementById(`comparison-device-${{index}}`).textContent = getShortName(device);
+                document.getElementById(`comparison-device-${{index}}`).style.fontWeight = 'bold';
                 
                 // Fill in properties
-                document.getElementById(`prop-Vendor-${index}`).textContent = device.device.vendor || 'Unknown';
-                document.getElementById(`prop-Model-${index}`).textContent = device.device.model || 'Unknown';
-                document.getElementById(`prop-Size-${index}`).textContent = 
+                document.getElementById(`prop-Vendor-${{index}}`).textContent = device.device.vendor || 'Unknown';
+                document.getElementById(`prop-Model-${{index}}`).textContent = device.device.model || 'Unknown';
+                document.getElementById(`prop-Size-${{index}}`).textContent = 
                     device.device.size_bytes ? 
-                    `${(device.device.size_bytes / (1024*1024*1024)).toFixed(2)} GB` : 'Unknown';
-                document.getElementById(`prop-Write-Latency-${index}`).textContent = `${device.latency.write_ms.toFixed(2)} ms`;
-                document.getElementById(`prop-Read-Latency-${index}`).textContent = `${device.latency.read_ms.toFixed(2)} ms`;
-                document.getElementById(`prop-Random-Read-Latency-${index}`).textContent = `${device.latency.random_read_ms.toFixed(2)} ms`;
-                document.getElementById(`prop-Write-Throughput-${index}`).textContent = `${device.throughput.write_mbps.toFixed(2)} MB/s`;
-                document.getElementById(`prop-Read-Throughput-${index}`).textContent = `${device.throughput.read_mbps.toFixed(2)} MB/s`;
-                document.getElementById(`prop-Last-Tested-${index}`).textContent = 
+                    `${{(device.device.size_bytes / (1024*1024*1024)).toFixed(2)}} GB` : 'Unknown';
+                document.getElementById(`prop-Write-Latency-${{index}}`).textContent = `${{device.latency.write_ms.toFixed(2)}} ms`;
+                document.getElementById(`prop-Read-Latency-${{index}}`).textContent = `${{device.latency.read_ms.toFixed(2)}} ms`;
+                document.getElementById(`prop-Random-Read-Latency-${{index}}`).textContent = `${{device.latency.random_read_ms.toFixed(2)}} ms`;
+                document.getElementById(`prop-Write-Throughput-${{index}}`).textContent = `${{device.throughput.write_mbps.toFixed(2)}} MB/s`;
+                document.getElementById(`prop-Read-Throughput-${{index}}`).textContent = `${{device.throughput.read_mbps.toFixed(2)}} MB/s`;
+                document.getElementById(`prop-Last-Tested-${{index}}`).textContent = 
                     device.timestamp.includes('T') ? 
-                    `${device.timestamp.split('T')[0]} ${device.timestamp.split('T')[1].substring(0, 5)}` : 
+                    `${{device.timestamp.split('T')[0]}} ${{device.timestamp.split('T')[1].substring(0, 5)}}` : 
                     device.timestamp;
-            });
+            }});
             
             // Highlight best values
             highlightBestValues();
-        });
+        }});
         
-        function highlightBestValues() {
+        function highlightBestValues() {{
             // Properties that are better when higher
-            ['Write-Throughput', 'Read-Throughput'].forEach(prop => {
+            ['Write-Throughput', 'Read-Throughput'].forEach(prop => {{
                 let bestValue = -Infinity;
                 let bestIndex = -1;
                 
                 // Find best value
-                for (let i = 0; i < Math.min(selectedDevices.length, 5); i++) {
-                    const cell = document.getElementById(`prop-${prop}-${i}`);
+                for (let i = 0; i < Math.min(selectedDevices.length, 5); i++) {{
+                    const cell = document.getElementById(`prop-${{prop}}-${{i}}`);
                     const value = parseFloat(cell.textContent);
-                    if (value > bestValue) {
+                    if (value > bestValue) {{
                         bestValue = value;
                         bestIndex = i;
-                    }
-                }
+                    }}
+                }}
                 
                 // Highlight best
-                if (bestIndex >= 0) {
-                    document.getElementById(`prop-${prop}-${bestIndex}`).classList.add('highlight');
-                }
-            });
+                if (bestIndex >= 0) {{
+                    document.getElementById(`prop-${{prop}}-${{bestIndex}}`).classList.add('highlight');
+                }}
+            }});
             
             // Properties that are better when lower
-            ['Write-Latency', 'Read-Latency', 'Random-Read-Latency'].forEach(prop => {
+            ['Write-Latency', 'Read-Latency', 'Random-Read-Latency'].forEach(prop => {{
                 let bestValue = Infinity;
                 let bestIndex = -1;
                 
                 // Find best value
-                for (let i = 0; i < Math.min(selectedDevices.length, 5); i++) {
-                    const cell = document.getElementById(`prop-${prop}-${i}`);
+                for (let i = 0; i < Math.min(selectedDevices.length, 5); i++) {{
+                    const cell = document.getElementById(`prop-${{prop}}-${{i}}`);
                     const value = parseFloat(cell.textContent);
-                    if (value < bestValue) {
+                    if (value < bestValue) {{
                         bestValue = value;
                         bestIndex = i;
-                    }
-                }
+                    }}
+                }}
                 
                 // Highlight best
-                if (bestIndex >= 0) {
-                    document.getElementById(`prop-${prop}-${bestIndex}`).classList.add('highlight');
-                }
-            });
-        }
+                if (bestIndex >= 0) {{
+                    document.getElementById(`prop-${{prop}}-${{bestIndex}}`).classList.add('highlight');
+                }}
+            }});
+        }}
         
         // Device selection
-        document.addEventListener('click', function(e) {
-            if (e.target.classList.contains('device-selector')) {
+        document.addEventListener('click', function(e) {{
+            if (e.target.classList.contains('device-selector')) {{
                 const deviceId = parseInt(e.target.dataset.deviceId);
                 
-                if (e.target.checked) {
-                    if (selectedDevices.length >= 5) {
+                if (e.target.checked) {{
+                    if (selectedDevices.length >= 5) {{
                         alert('You can only compare up to 5 devices at once');
                         e.target.checked = false;
                         return;
-                    }
+                    }}
                     selectedDevices.push(deviceId);
-                } else {
+                }} else {{
                     selectedDevices = selectedDevices.filter(id => id !== deviceId);
-                }
-            }
-        });
+                }}
+            }}
+        }});
         
         // Search functionality
-        document.getElementById('search-devices').addEventListener('input', function() {
+        document.getElementById('search-devices').addEventListener('input', function() {{
             currentPage = 1;
             displayDevices();
-        });
+        }});
         
         // Category filter
-        document.getElementById('category-filter').addEventListener('change', function() {
+        document.getElementById('category-filter').addEventListener('change', function() {{
             currentPage = 1;
             displayDevices();
-        });
+        }});
         
         // Sort by
-        document.getElementById('sort-by').addEventListener('change', function() {
+        document.getElementById('sort-by').addEventListener('change', function() {{
             currentPage = 1;
             displayDevices();
-        });
+        }});
         
         // Chart selected devices
-        document.getElementById('chart-selected').addEventListener('click', function() {
-            if (selectedDevices.length === 0) {
+        document.getElementById('chart-selected').addEventListener('click', function() {{
+            if (selectedDevices.length === 0) {{
                 alert('Please select at least one device to chart');
                 return;
-            }
+            }}
             
             // Switch to charts tab
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1025,82 +1146,141 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             
             // Create custom chart with selected devices
             createCustomChart();
-        });
+        }});
         
         function createCustomChart() {
-            const ctx = document.getElementById('performanceChart').getContext('2d');
-            const metric = document.getElementById('chart-metric').value;
-            
-            let metricPath, metricLabel, yAxisLabel;
-            
-            switch(metric) {
-                case 'read_throughput':
-                    metricPath = device => device.throughput.read_mbps;
-                    metricLabel = 'Read Throughput';
-                    yAxisLabel = 'MB/s';
-                    break;
-                case 'write_throughput':
-                    metricPath = device => device.throughput.write_mbps;
-                    metricLabel = 'Write Throughput';
-                    yAxisLabel = 'MB/s';
-                    break;
-                case 'read_latency':
-                    metricPath = device => device.latency.read_ms;
-                    metricLabel = 'Read Latency';
-                    yAxisLabel = 'ms';
-                    break;
-                case 'write_latency':
-                    metricPath = device => device.latency.write_ms;
-                    metricLabel = 'Write Latency';
-                    yAxisLabel = 'ms';
-                    break;
-                case 'random_latency':
-                    metricPath = device => device.latency.random_read_ms;
-                    metricLabel = 'Random Read Latency';
-                    yAxisLabel = 'ms';
-                    break;
-            }
-            
-            const selectedDeviceData = selectedDevices.map(id => allDevices[id]);
-            const labels = selectedDeviceData.map(device => getShortName(device));
-            const data = selectedDeviceData.map(metricPath);
-            
-            if (window.performanceChart) {
-                window.performanceChart.destroy();
-            }
-            
-            window.performanceChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: metricLabel,
-                        data: data,
-                        backgroundColor: 'rgba(54, 162, 235, 0.5)',
-                        borderColor: 'rgba(54, 162, 235, 1)',
-                        borderWidth: 1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: yAxisLabel
-                            }
-                        }
-                    },
-                    plugins: {
-                        title: {
-                            display: true,
-                            text: `Selected Devices: ${metricLabel} Comparison`
-                        }
+            try {
+                console.log("Creating custom chart for selected devices:", selectedDevices);
+                const ctx = document.getElementById('performanceChart').getContext('2d');
+                const metric = document.getElementById('chart-metric').value;
+                
+                if (!ctx) {
+                    console.error("Canvas context not found");
+                    alert("Error: Could not find the chart canvas");
+                    return;
+                }
+                
+                let metricPath, metricLabel, yAxisLabel;
+                
+                switch(metric) {
+                    case 'read_throughput':
+                        metricPath = device => device.throughput.read_mbps;
+                        metricLabel = 'Read Throughput';
+                        yAxisLabel = 'MB/s';
+                        break;
+                    case 'write_throughput':
+                        metricPath = device => device.throughput.write_mbps;
+                        metricLabel = 'Write Throughput';
+                        yAxisLabel = 'MB/s';
+                        break;
+                    case 'read_latency':
+                        metricPath = device => device.latency.read_ms;
+                        metricLabel = 'Read Latency';
+                        yAxisLabel = 'ms';
+                        break;
+                    case 'write_latency':
+                        metricPath = device => device.latency.write_ms;
+                        metricLabel = 'Write Latency';
+                        yAxisLabel = 'ms';
+                        break;
+                    case 'random_latency':
+                        metricPath = device => device.latency.random_read_ms;
+                        metricLabel = 'Random Read Latency';
+                        yAxisLabel = 'ms';
+                        break;
+                    default:
+                        console.error("Unknown metric:", metric);
+                        alert("Error: Unknown metric selected");
+                        return;
+                }
+                
+                // Get data for selected devices
+                const selectedDeviceData = [];
+                for (const id of selectedDevices) {
+                    if (allDevices[id]) {
+                        selectedDeviceData.push(allDevices[id]);
+                    } else {
+                        console.warn("Device not found:", id);
                     }
                 }
-            });
+                
+                console.log("Selected device data:", selectedDeviceData);
+                
+                if (selectedDeviceData.length === 0) {
+                    alert("No valid devices selected for charting");
+                    return;
+                }
+                
+                // Get labels and data, handling potential errors
+                const labels = [];
+                const data = [];
+                for (const device of selectedDeviceData) {
+                    try {
+                        // Use friendly name as fallback if getShortName fails
+                        let shortName;
+                        try {
+                            shortName = getShortName(device);
+                        } catch (e) {
+                            console.warn("Error in getShortName:", e);
+                            shortName = device.device.friendly_name || "Unknown Device";
+                        }
+                        labels.push(shortName);
+                        
+                        // Get metric value safely
+                        const metricValue = metricPath(device);
+                        data.push(metricValue !== null && metricValue !== undefined ? metricValue : 0);
+                    } catch (e) {
+                        console.error("Error processing device data:", e, device);
+                    }
+                }
+                
+                console.log("Chart labels:", labels);
+                console.log("Chart data:", data);
+                
+                // Destroy existing chart if it exists
+                if (window.performanceChart) {
+                    window.performanceChart.destroy();
+                }
+                
+                // Create new chart
+                window.performanceChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: metricLabel,
+                            data: data,
+                            backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: yAxisLabel
+                                }
+                            }
+                        },
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: `Selected Devices: ${metricLabel} Comparison`
+                            }
+                        }
+                    }
+                });
+                
+                console.log("Chart created successfully");
+            } catch (e) {
+                console.error("Error creating chart:", e);
+                alert("Error creating chart: " + e.message);
+            }
         }
         
         // Chart update button
@@ -1109,12 +1289,12 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
         // Filter devices based on search, category and sort criteria
         let filteredDevices = [];
         
-        function filterDevices() {
+        function filterDevices() {{
             const searchTerm = document.getElementById('search-devices').value.toLowerCase();
             const category = document.getElementById('category-filter').value;
             const sortBy = document.getElementById('sort-by').value;
             
-            filteredDevices = allDevices.filter(device => {
+            filteredDevices = allDevices.filter(device => {{
                 // Search filter
                 const deviceName = device.device.friendly_name.toLowerCase();
                 const model = (device.device.model || '').toLowerCase();
@@ -1126,24 +1306,24 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
                 
                 // Category filter
                 let matchesCategory = true;
-                if (category !== 'all') {
+                if (category !== 'all') {{
                     let deviceVendor = vendor;
-                    if (deviceVendor === "(standard disk drives)") {
+                    if (deviceVendor === "(standard disk drives)") {{
                         // Extract vendor from model name
                         const modelParts = model.split(' ');
-                        if (modelParts.length > 0) {
+                        if (modelParts.length > 0) {{
                             deviceVendor = modelParts[0].toLowerCase();
-                        }
-                    }
+                        }}
+                    }}
                     matchesCategory = deviceVendor.includes(category.toLowerCase());
-                }
+                }}
                 
                 return matchesSearch && matchesCategory;
-            });
+            }});
             
             // Sort devices
-            filteredDevices.sort((a, b) => {
-                switch(sortBy) {
+            filteredDevices.sort((a, b) => {{
+                switch(sortBy) {{
                     case 'read_throughput':
                         return b.throughput.read_mbps - a.throughput.read_mbps;
                     case 'write_throughput':
@@ -1156,12 +1336,12 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
                         return a.latency.random_read_ms - b.latency.random_read_ms;
                     default:
                         return 0;
-                }
-            });
-        }
+                }}
+            }});
+        }}
         
         // Display filtered devices with pagination
-        function displayDevices() {
+        function displayDevices() {{
             filterDevices();
             setupPagination();
             
@@ -1172,7 +1352,7 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
             const tableBody = document.querySelector('#summary-table tbody');
             tableBody.innerHTML = '';
             
-            deviceSubset.forEach((device, localIndex) => {
+            deviceSubset.forEach((device, localIndex) => {{
                 const deviceIndex = allDevices.findIndex(d => 
                     d.device.friendly_name === device.device.friendly_name);
                 
@@ -1183,36 +1363,69 @@ def generate_html_report(devices: List[Dict], output_path: str) -> None:
                 
                 // Format timestamp
                 let timestamp = device.timestamp;
-                if (timestamp.includes('T')) {
+                if (timestamp.includes('T')) {{
                     timestamp = timestamp.split('T')[0] + ' ' + timestamp.split('T')[1].substring(0, 5);
-                }
+                }}
                 
                 // Create row cells
                 row.innerHTML = `
-                    <td><label><input type="checkbox" class="device-selector" data-device-id="${deviceIndex}" 
-                        ${selectedDevices.includes(deviceIndex) ? 'checked' : ''}> ${device.device.friendly_name}</label></td>
-                    <td>${device.latency.write_ms.toFixed(2)}</td>
-                    <td>${device.latency.read_ms.toFixed(2)}</td>
-                    <td>${device.latency.random_read_ms.toFixed(2)}</td>
-                    <td>${device.throughput.write_mbps.toFixed(2)}</td>
-                    <td>${device.throughput.read_mbps.toFixed(2)}</td>
-                    <td class="timestamp">${timestamp}</td>
+                    <td><label><input type="checkbox" class="device-selector" data-device-id="${{deviceIndex}}" 
+                        ${{selectedDevices.includes(deviceIndex) ? 'checked' : ''}}> ${{device.device.friendly_name}}</label></td>
+                    <td>${{device.latency.write_ms.toFixed(2)}}</td>
+                    <td>${{device.latency.read_ms.toFixed(2)}}</td>
+                    <td>${{device.latency.random_read_ms.toFixed(2)}}</td>
+                    <td>${{device.throughput.write_mbps.toFixed(2)}}</td>
+                    <td>${{device.throughput.read_mbps.toFixed(2)}}</td>
+                    <td class="timestamp">${{timestamp}}</td>
                 `;
                 
                 tableBody.appendChild(row);
-            });
+            }});
             
             // Show message if no results
-            if (deviceSubset.length === 0) {
+            if (deviceSubset.length === 0) {{
                 const row = document.createElement('tr');
                 row.innerHTML = `<td colspan="7" style="text-align: center;">No devices found matching your criteria</td>`;
                 tableBody.appendChild(row);
-            }
-        }
+            }}
+        }}
         
         // Initialize the page
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', function() {{
             displayDevices();
+        }});
+
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('remove-device')) {
+                const deviceId = parseInt(e.target.dataset.deviceId);
+                const deviceName = allDevices[deviceId].device.friendly_name;
+                
+                if (confirm(`Are you sure you want to remove "${deviceName}" from the report?`)) {
+                    // Create a form to submit the removal request
+                    const form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = 'remove_device.py';
+                    form.style.display = 'none';
+                    
+                    // Add the device ID
+                    const idField = document.createElement('input');
+                    idField.type = 'hidden';
+                    idField.name = 'device_id';
+                    idField.value = deviceId;
+                    form.appendChild(idField);
+                    
+                    // Add script path as reference
+                    const scriptPath = document.createElement('input');
+                    scriptPath.type = 'hidden';
+                    scriptPath.name = 'script_path';
+                    scriptPath.value = window.location.pathname;
+                    form.appendChild(scriptPath);
+                    
+                    // Submit the form
+                    document.body.appendChild(form);
+                    form.submit();
+                }
+            }
         });
     </script>
 </body>

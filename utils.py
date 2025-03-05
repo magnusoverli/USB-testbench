@@ -23,11 +23,26 @@ except ImportError:
     HAS_WIN32 = False
 
 def get_usb_drives() -> List[Dict]:
-    """Get a list of connected USB flash drives using PowerShell."""
-    # PowerShell command to get USB drives that are removable (flash drives)
+    """Get a list of connected USB flash drives including SCSI-reported USB devices."""
+    # Enhanced PowerShell command to detect all types of USB storage devices
     ps_command = """
     Get-WmiObject Win32_DiskDrive | 
-    Where-Object { $_.InterfaceType -eq "USB" -and $_.MediaType -like "*removable*" } | 
+    Where-Object { 
+        # Traditional USB removable drives
+        ($_.InterfaceType -eq "USB" -and $_.MediaType -like "*removable*") -or
+        
+        # External USB drives that report as SCSI
+        (
+            # Model name contains USB
+            ($_.Model -like "*USB*" -or $_.Caption -like "*USB*") -or 
+            
+            # Device ID contains USB
+            ($_.PNPDeviceID -like "*USB*") -or
+            
+            # Handle external drives even without USB in name
+            ($_.MediaType -eq "External hard disk media")
+        )
+    } | 
     ForEach-Object {
         $disk = $_
         $partitions = Get-WmiObject -Query "ASSOCIATORS OF {Win32_DiskDrive.DeviceID='$($disk.DeviceID)'} WHERE AssocClass=Win32_DiskDriveToDiskPartition"
@@ -45,6 +60,10 @@ def get_usb_drives() -> List[Dict]:
                     SerialNumber = $disk.SerialNumber
                     InterfaceType = $disk.InterfaceType
                     MediaType = $disk.MediaType
+                    PNPDeviceID = $disk.PNPDeviceID
+                    FirmwareRevision = $disk.FirmwareRevision
+                    Signature = $disk.Signature
+                    Index = $disk.Index
                 }
             }
         }
