@@ -9,15 +9,15 @@ from typing import Dict, List, Optional, Tuple, Any
 
 def get_db_path() -> str:
     """Get the path to the database file, creating directories if needed."""
-    # Store in user's home directory to ensure write permissions
-    home_dir = os.path.expanduser("~")
-    app_dir = os.path.join(home_dir, ".usb_benchmark")
+    # Store in the project directory where the script is running
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(project_dir, "data")
     
     # Create directory if it doesn't exist
-    if not os.path.exists(app_dir):
-        os.makedirs(app_dir)
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
         
-    return os.path.join(app_dir, "benchmark_results.db")
+    return os.path.join(data_dir, "benchmark_results.db")
 
 def init_database() -> None:
     """Initialize the database with required tables if they don't exist."""
