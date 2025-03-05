@@ -6,10 +6,10 @@ import random
 import time
 import subprocess
 import tempfile
-import shutil
 import json
 import ctypes
 import gc
+import hashlib
 from typing import List, Dict, Tuple
 
 # Add Win32 API imports for direct disk access (bypassing cache)
@@ -88,11 +88,71 @@ def get_usb_drives() -> List[Dict]:
         result = json.loads(process.stdout)
         # Handle case where only one drive is returned (not in a list)
         if isinstance(result, dict):
-            return [result]
+            result = [result]
+            
+        # Generate a unique identifier for each device
+        for drive in result:
+            drive['device_id'] = generate_device_id(drive)
+            
         return result
     except json.JSONDecodeError:
         print(f"Error parsing JSON output: {process.stdout}")
         return []
+
+def generate_device_id(drive: Dict) -> str:
+    """
+    Generate a unique device identifier from drive information.
+    Uses a combination of serial number, hardware signature, and other identifiers.
+    """
+    # Components to use for the unique ID
+    components = []
+    
+    # Serial number (most important)
+    serial = drive.get('SerialNumber', '')
+    if serial:
+        components.append(f"SN:{serial}")
+    
+    # Hardware signature
+    signature = drive.get('Signature', '')
+    if signature:
+        components.append(f"SIG:{signature}")
+    
+    # PNP Device ID (contains hardware identifiers)
+    pnp_id = drive.get('PNPDeviceID', '')
+    if pnp_id:
+        components.append(f"PNP:{pnp_id}")
+    
+    # Add model and vendor if available
+    model = drive.get('Model', '')
+    if model:
+        components.append(f"MDL:{model}")
+    
+    vendor = drive.get('Vendor', '')
+    if vendor:
+        components.append(f"VDR:{vendor}")
+    
+    # If we still don't have enough information, add size
+    if len(components) < 2:
+        size = drive.get('SizeGB', 0)
+        components.append(f"SZ:{size}")
+    
+    # Create a hash for a shorter ID
+    if components:
+        # Join components and create SHA-256 hash
+        component_str = "|".join(components)
+        hash_obj = hashlib.sha256(component_str.encode())
+        
+        # Use first 16 chars of hash for reasonable length
+        device_id = hash_obj.hexdigest()[:16]
+        
+        # Also store the original components for debugging/verification
+        drive['id_components'] = component_str
+        
+        return device_id
+    else:
+        # Fallback if no identifiable information is available
+        # Use a timestamp + random value (not ideal but prevents errors)
+        return f"UNKNOWN_{int(time.time())}_{random.randint(1000, 9999)}"
 
 def select_drive(drives: List[Dict]) -> Dict:
     """Let the user select a drive from the list."""
@@ -105,9 +165,11 @@ def select_drive(drives: List[Dict]) -> Dict:
         vendor = drive.get('Vendor', 'Unknown Vendor')
         model = drive.get('Model', 'Unknown Model')
         volume_name = drive.get('VolumeName', 'No Label')
+        device_id = drive.get('device_id', 'Unknown ID')
         
         print(f"{i+1}. {drive['DriveLetter']} - {volume_name} ({drive['SizeGB']} GB)")
         print(f"   Model: {model} | Vendor: {vendor}")
+        print(f"   Device ID: {device_id}")
     
     while True:
         try:
@@ -282,6 +344,8 @@ def display_results(drive_info: Dict, write_results: Dict, read_results: Dict, s
     
     vendor = drive_info.get('Vendor', 'Unknown Vendor')
     print(f"  Vendor: {vendor}")
+    
+    print(f"  Device ID: {drive_info['device_id']}")
     
     if 'SerialNumber' in drive_info and drive_info['SerialNumber']:
         print(f"  Serial Number: {drive_info['SerialNumber']}")
